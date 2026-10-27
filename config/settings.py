@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,6 +28,7 @@ INSTALLED_APPS = [
     "axes",
     "accounts",
     "prints",
+    "notifications",
 ]
 
 MIDDLEWARE = [
@@ -55,6 +57,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "config.context_processors.contact",
             ],
         },
     },
@@ -135,6 +138,9 @@ STORAGES = {
     },
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
+if sys.argv[1:2] == ["test"]:
+    # Tests render pages without running collectstatic first, so there is no manifest to look names up in.
+    STORAGES["staticfiles"] = {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
 ALLOWED_MODEL_EXTENSIONS = ["stl", "3mf"]
@@ -143,6 +149,27 @@ MAX_FILES_PER_REQUEST = 10
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 
 PRINT_CAP_GRAMS_PER_MONTH = int(os.environ.get("PRINT_CAP_GRAMS_PER_MONTH", "500"))
+
+# Public address of the site, used for links in emails, e.g. https://print.example.ac.uk
+SITE_URL = os.environ.get("DJANGO_SITE_URL", "http://localhost:8000")
+
+# Outgoing email (verification codes and opt-in notifications). Without EMAIL_HOST, emails are printed to the
+# app's log instead (`docker compose logs app`), which is handy for local testing.
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+    EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)  # STARTTLS on 587
+    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_TIMEOUT = 10
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "PrintPool <printpool@localhost>")
+
+# Optional contact addresses, shown as mailto: links. Users see the staff one; staff also see the admin one.
+CONTACT_STAFF_EMAIL = os.environ.get("CONTACT_STAFF_EMAIL", "").strip()
+CONTACT_ADMIN_EMAIL = os.environ.get("CONTACT_ADMIN_EMAIL", "").strip()
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

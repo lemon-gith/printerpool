@@ -9,6 +9,8 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
+from notifications.services import notify
+
 from .models import Print, PrintRequest, RequestFile, StatusEvent
 
 RS = PrintRequest.Status
@@ -36,6 +38,10 @@ REQUEST_TRANSITIONS = {
     RS.APPROVED: {RS.REJECTED: STAFF, RS.RECALLED: OWNER},
     RS.IN_PROGRESS: {RS.COMPLETED: STAFF, RS.REJECTED: STAFF, RS.RECALLED: OWNER},
 }
+
+# Status changes that can send an email (only to verified addresses that opted in; see notifications.events).
+REQUEST_NOTIFICATIONS = {RS.APPROVED: "request_approved", RS.REJECTED: "request_rejected", RS.COMPLETED: "request_completed"}
+PRINT_NOTIFICATIONS = {PS.PRINTING: "print_started", PS.SUCCEEDED: "print_succeeded", PS.FAILED: "print_failed"}
 
 # Ordered: this is also the button order in the UI.
 PRINT_TRANSITIONS = {
@@ -91,6 +97,8 @@ def transition_request(req, new_status, actor, note=""):
     req.save()
 
     StatusEvent.objects.create(request=req, from_status=old_status, to_status=new_status, actor=actor, note=note)
+    if new_status in REQUEST_NOTIFICATIONS:
+        notify(REQUEST_NOTIFICATIONS[new_status], req, actor=actor, note=note)
 
     if new_status in REQUEST_CLOSING_STATUSES:
         for job in req.prints.select_for_update().filter(status=PS.QUEUED):
@@ -148,6 +156,9 @@ def transition_print(job, new_status, actor, *, filament_used_g=None, note=""):
     StatusEvent.objects.create(
         request=req, print_job=job, from_status=old_status, to_status=new_status, actor=actor, note=note
     )
+
+    if new_status in PRINT_NOTIFICATIONS:
+        notify(PRINT_NOTIFICATIONS[new_status], req, actor=actor, print_job=job, note=note)
 
     if new_status in PRINT_STATUSES_SETTING_EXPIRY:
         _bump_expiry(req, now)
@@ -210,6 +221,7 @@ def submit_request(user, *, files, supersedes=None, **fields):
         how = "files carried over" if take_over_files else "new files uploaded"
         note = f"Replaces recalled request “{supersedes.title}” ({how})"
     StatusEvent.objects.create(request=req, to_status=RS.SUBMITTED, actor=user, note=note)
+    notify("staff_new_request", req, actor=user)
     return req
 
 

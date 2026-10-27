@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 {% if user.is_print_staff %}
-  <div class="card">
+  <div class="card" id="active-prints" data-live>
     <h2>Active prints</h2>
     {% if active_prints %}
     <div class="table-scroll"><table>
@@ -19,7 +19,7 @@
     {% else %}<p class="muted">Nothing queued or printing.</p>{% endif %}
   </div>
 {% else %}
-  <div class="card">{% include "prints/_cap.html" %}</div>
+  <div class="card" id="usage" data-live>{% include "prints/_cap.html" %}</div>
 {% endif %}
 
   <div class="card">
@@ -34,6 +34,7 @@
       {% if search or status_filter %}<a href="{% url 'dashboard' %}">Clear</a>{% endif %}
     </form>
 
+    <div id="request-list" data-live>
     {% if page.object_list %}
     <div class="table-scroll"><table>
       <tr><th>Title</th>{% if user.is_print_staff %}<th>User</th>{% endif %}<th>Status</th><th>Submitted</th></tr>
@@ -59,5 +60,6 @@
     {% else %}
     <p class="muted">No requests yet. <a href="{% url 'request_create' %}">Submit one</a>.</p>
     {% endif %}
+    </div>
   </div>
 {% endblock %}

@@ -141,6 +141,8 @@ def request_detail(request, pk):
             and not hasattr(req, "replaced_by")
         ),
         "print_form": PrintCreateForm() if is_staff else None,
+        "mail_subject": f"PrintPool: {req.title}",
+        "mail_body": f"\n\n---\nRequest: {request.build_absolute_uri()}",
     }
     return render(request, "prints/request_detail.html", ctx)
 

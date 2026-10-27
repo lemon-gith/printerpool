@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ req.title }} · PrintPool{% endblock %}
 {% block content %}
-<div class="card">
+<div class="card" id="req-head" data-live>
   <h1>{{ req.title }} <span class="badge s-{{ req.status }}">{{ req.get_status_display }}</span></h1>
   <p class="muted">
     Submitted by {{ req.user.username }} on {{ req.created_at|date:"j M Y, H:i" }} ·
@@ -27,10 +27,13 @@
   </form>
   {% endif %}
   {% if blocked_reason %}<p class="muted">{{ blocked_reason }}</p>{% endif %}
+  {% if contact_staff_email and req.user_id == user.pk %}
+  <p class="muted">Questions about this request? <a href="mailto:{{ contact_staff_email }}?subject={{ mail_subject|urlencode }}&amp;body={{ mail_body|urlencode }}">Email staff</a></p>
+  {% endif %}
 </div>
 
 <div class="grid2">
-  <div class="card">
+  <div class="card" id="req-files" data-live>
     <h2>Files</h2>
     {% if replaced_by and not files %}
       <p class="muted">The files were carried over to <a href="{% url 'request_detail' replaced_by.pk %}">{{ replaced_by.title }}</a>.</p>
@@ -50,7 +53,7 @@
   {% endif %}
 </div>
 
-<div class="card">
+<div class="card" id="req-prints" data-live>
   <h2>Prints</h2>
   {% if prints %}
   <div class="table-scroll"><table>
@@ -96,7 +99,7 @@
   {% endif %}
 </div>
 
-<div class="card">
+<div class="card" id="req-history" data-live>
   <h2>History</h2>
   <div class="table-scroll"><table>
     {% for e in events %}
