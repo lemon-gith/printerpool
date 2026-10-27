@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+{% if user.is_print_staff %}
+  <div class="card">
+    <h2>Active prints</h2>
+    {% if active_prints %}
+    <div class="table-scroll"><table>
+      <tr><th>Request</th><th>User</th><th>Printer</th><th>Status</th><th>Estimate</th></tr>
+      {% for p in active_prints %}
+      <tr>
+        <td><a href="{% url 'request_detail' p.request_id %}">{{ p.request.title }}</a></td>
+        <td>{{ p.request.user.username }}</td>
+        <td>{{ p.printer|default:"—" }}</td>
+        <td><span class="badge s-{{ p.status }}">{{ p.get_status_display }}</span></td>
+        <td>{% if p.est_remaining is not None %}~{{ p.est_finish_at|timeuntil }} left{% else %}{{ p.est_duration_minutes }} min{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% else %}<p class="muted">Nothing queued or printing.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h2>All requests</h2>
+    <form method="get">
+      <select name="status" onchange="this.form.submit()" style="max-width:14rem">
+        <option value="">All statuses</option>
+        {% for value, label in statuses %}<option value="{{ value }}" {% if value == status_filter %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </form>
+{% else %}
+  <div class="card">{% include "prints/_cap.html" %}</div>
+  <div class="card">
+    <h2>My requests</h2>
+{% endif %}
+    {% if requests %}
+    <div class="table-scroll"><table>
+      <tr><th>Title</th>{% if user.is_print_staff %}<th>User</th>{% endif %}<th>Status</th><th>Submitted</th></tr>
+      {% for r in requests %}
+      <tr>
+        <td><a href="{% url 'request_detail' r.pk %}">{{ r.title }}</a></td>
+        {% if user.is_print_staff %}<td>{{ r.user.username }}</td>{% endif %}
+        <td><span class="badge s-{{ r.status }}">{{ r.get_status_display }}</span></td>
+        <td>{{ r.created_at|date:"j M Y, H:i" }}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% else %}
+    <p class="muted">No requests yet. <a href="{% url 'request_create' %}">Submit one</a>.</p>
+    {% endif %}
+  </div>
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ req.title }} · PrintPool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ req.title }} <span class="badge s-{{ req.status }}">{{ req.get_status_display }}</span></h1>
+  <p class="muted">
+    Submitted by {{ req.user.username }} on {{ req.created_at|date:"j M Y, H:i" }} ·
+    {{ req.get_material_display }}{% if req.colour %}, {{ req.colour }}{% endif %}
+  </p>
+  {% if req.notes %}<p>{{ req.notes|linebreaksbr }}</p>{% endif %}
+  {% if req.review_note %}<p><strong>Staff note:</strong> {{ req.review_note }}</p>{% endif %}
+
+  {% if transitions %}
+  <form method="post" action="{% url 'request_action' req.pk %}">
+    {% csrf_token %}
+    {% if user.is_print_staff %}<p><label for="note">Note (optional, shown to the user)</label><textarea id="note" name="note" rows="2"></textarea></p>{% endif %}
+    {% for value, label in transitions %}
+      <button name="to_status" value="{{ value }}" {% if value == "rejected" or value == "cancelled" %}class="secondary"{% endif %}>
+        {% if value == "approved" %}Approve{% elif value == "rejected" %}Reject{% elif value == "cancelled" %}Cancel request{% elif value == "completed" %}Mark completed{% else %}{{ label }}{% endif %}
+      </button>
+    {% endfor %}
+  </form>
+  {% endif %}
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h2>Files</h2>
+    {% if req.files_available %}
+      <ul>{% for f in files %}<li><a href="{% url 'file_download' f.pk %}">{{ f.original_name }}</a> <span class="muted">{{ f.size|filesizeformat }}</span></li>{% endfor %}</ul>
+      <p class="muted">Files expire {{ req.files_expire_at|date:"j M Y, H:i" }} ({{ req.files_expire_at|timeuntil }}).</p>
+    {% else %}
+      <ul>{% for f in files %}<li>{{ f.original_name }} <span class="muted">{{ f.size|filesizeformat }}</span></li>{% endfor %}</ul>
+      <p class="muted">These files have expired and been removed.</p>
+    {% endif %}
+  </div>
+  {% if user.is_print_staff %}
+  <div class="card">
+    <h2>{{ req.user.username }}'s usage</h2>
+    {% include "prints/_cap.html" with cap=owner_cap %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Prints</h2>
+  {% if prints %}
+  <div class="table-scroll"><table>
+    <tr><th>#</th><th>Printer</th><th>Status</th><th>Time</th><th>Filament</th>{% if user.is_print_staff %}<th></th>{% endif %}</tr>
+    {% for p in prints %}
+    <tr>
+      <td>{{ forloop.counter }}</td>
+      <td>{{ p.printer|default:"—" }}</td>
+      <td><span class="badge s-{{ p.status }}">{{ p.get_status_display }}</span></td>
+      <td>
+        {% if p.status == "printing" %}Started {{ p.started_at|date:"H:i" }}, ~{{ p.est_finish_at|timeuntil }} left (est. finish {{ p.est_finish_at|date:"H:i" }})
+        {% elif p.actual_duration %}Took {{ p.started_at|timesince:p.finished_at }}
+        {% else %}Est. {{ p.est_duration_minutes }} min{% endif %}
+      </td>
+      <td>{% if p.filament_used_g is not None %}{{ p.filament_used_g }} g{% else %}~{{ p.est_filament_g }} g{% endif %}</td>
+      {% if user.is_print_staff %}
+      <td>
+        {% if p.allowed_transitions %}
+        <form method="post" action="{% url 'print_action' p.pk %}">
+          {% csrf_token %}
+          {% if p.status == "printing" %}<input type="number" name="filament_used_g" placeholder="g used (default: estimate)" min="0" style="width:13rem">{% endif %}
+          {% for value in p.allowed_transitions %}
+          <button name="to_status" value="{{ value }}" {% if value == "failed" or value == "cancelled" %}class="secondary"{% endif %}>
+            {% if value == "printing" %}Start{% elif value == "succeeded" %}Done{% elif value == "failed" %}Failed{% else %}Cancel{% endif %}
+          </button>
+          {% endfor %}
+        </form>
+        {% endif %}
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="muted">No prints yet.</p>{% endif %}
+
+  {% if can_queue_print %}
+  <h3>Queue a print</h3>
+  <form method="post" action="{% url 'print_create' req.pk %}">
+    {% csrf_token %}
+    {{ print_form.as_p }}
+    <p><button>Queue print</button></p>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>History</h2>
+  <div class="table-scroll"><table>
+    {% for e in events %}
+    <tr>
+      <td class="muted">{{ e.at|date:"j M Y, H:i" }}</td>
+      <td>{% if e.print_job_id %}Print #{{ e.print_job_id }}: {% endif %}{% if e.from_status %}{{ e.from_status }} → {% endif %}<strong>{{ e.to_status }}</strong></td>
+      <td>{{ e.actor.username|default:"—" }}</td>
+      <td>{{ e.note }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endblock %}

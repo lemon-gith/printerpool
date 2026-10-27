@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}New request · PrintPool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>New print request</h1>
+  {% include "prints/_cap.html" %}
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <p><button>Submit request</button></p>
+  </form>
+  <p class="muted">Uploaded files are deleted 30 days after submission if nothing happens, or 7 days after printing starts or the request is rejected.</p>
+</div>
+{% endblock %}

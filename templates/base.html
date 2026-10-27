@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PrintPool{% endblock %}</title>
+  <style>
+    :root { --fg:#1d232a; --muted:#5f6b76; --bg:#f6f7f9; --card:#fff; --line:#dfe3e8; --accent:#2457c5; --ok:#1d7a46; --warn:#a35b00; --bad:#b3261e; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--fg); background:var(--bg); }
+    header { background:var(--card); border-bottom:1px solid var(--line); }
+    header .wrap { display:flex; align-items:center; gap:1rem; padding:.75rem 1rem; }
+    header nav { margin-left:auto; display:flex; gap:1rem; align-items:center; }
+    .brand { font-weight:700; color:var(--fg); text-decoration:none; }
+    .wrap { max-width:1000px; margin:0 auto; padding:1rem; }
+    a { color:var(--accent); }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1rem 1.25rem; margin-bottom:1rem; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:.45rem .5rem; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); }
+    .muted { color:var(--muted); font-size:.9rem; }
+    .badge { display:inline-block; padding:.05rem .5rem; border-radius:999px; font-size:.8rem; background:#e8ecf2; }
+    .s-approved,.s-succeeded,.s-completed { background:#dcf3e5; color:var(--ok); }
+    .s-printing,.s-in_progress { background:#dde8ff; color:var(--accent); }
+    .s-rejected,.s-failed,.s-cancelled { background:#fbe3e1; color:var(--bad); }
+    .s-queued,.s-submitted { background:#fff1d6; color:var(--warn); }
+    .messages { list-style:none; padding:0; }
+    .messages li { padding:.6rem 1rem; border-radius:6px; margin-bottom:.5rem; background:#e8f0ff; }
+    .messages .error { background:#fbe3e1; } .messages .success { background:#dcf3e5; }
+    form p { margin:.5rem 0; } label { font-weight:600; display:block; }
+    input[type=text], input[type=password], input[type=number], select, textarea { width:100%; max-width:30rem; padding:.4rem; border:1px solid var(--line); border-radius:4px; font:inherit; }
+    button, .btn { background:var(--accent); color:#fff; border:0; padding:.45rem .9rem; border-radius:4px; font:inherit; cursor:pointer; text-decoration:none; display:inline-block; }
+    button.secondary { background:#e8ecf2; color:var(--fg); }
+    .inline-form { display:inline; }
+    .errorlist { color:var(--bad); padding-left:1rem; }
+    .meter { height:8px; background:#e8ecf2; border-radius:4px; overflow:hidden; max-width:20rem; }
+    .meter > span { display:block; height:100%; background:var(--accent); }
+    .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1rem; }
+    .table-scroll { overflow-x:auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a class="brand" href="{% url 'dashboard' %}">PrintPool</a>
+      {% if user.is_authenticated %}
+      <nav>
+        <a href="{% url 'request_create' %}">New request</a>
+        {% if user.is_admin %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
+        <a href="{% url 'password_change' %}">Password</a>
+        <span class="muted">{{ user.username }} ({{ user.get_role_display }})</span>
+        <form class="inline-form" method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="secondary">Log out</button></form>
+      </nav>
+      {% endif %}
+    </div>
+  </header>
+  <main class="wrap">
+    {% if messages %}
+    <ul class="messages">{% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

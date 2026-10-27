@@ -1,0 +1,5 @@
+<div>
+  <strong>{{ cap.used_g }} g</strong> of {{ cap.cap_g }} g used this month
+  {% if cap.over %}<span class="badge s-failed">cap reached</span>{% endif %}
+  <div class="meter"><span style="width:{% widthratio cap.used_g cap.cap_g 100 %}%;max-width:100%"></span></div>
+</div>

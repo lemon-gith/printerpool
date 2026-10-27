@@ -1,0 +1,8 @@
+{$SITE_DOMAIN} {
+	encode gzip
+	request_body {
+		# Up to 10 files x 50 MB per request, plus form overhead
+		max_size 520MB
+	}
+	reverse_proxy app:8000
+}

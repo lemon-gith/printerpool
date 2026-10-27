@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Log in · PrintPool{% endblock %}
+{% block content %}
+<div class="card" style="max-width:24rem;margin:3rem auto">
+  <h1>Log in</h1>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <p><label for="id_username">Username</label>{{ form.username }}</p>
+    <p><label for="id_password">Password</label>{{ form.password }}</p>
+    <input type="hidden" name="next" value="{{ next }}">
+    <p><button>Log in</button></p>
+  </form>
+  <p class="muted">Don't have an account? Ask a member of staff.</p>
+</div>
+{% endblock %}
