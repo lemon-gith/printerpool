@@ -114,6 +114,10 @@ AXES_COOLOFF_TIME = 0.25  # hours
 AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
 AXES_RESET_ON_SUCCESS = True
 AXES_LOCKOUT_TEMPLATE = "registration/lockout.html"
+AXES_CLIENT_IP_CALLABLE = "accounts.ip.client_ip"
+# Number of reverse proxies we run in front of the app (1 with the bundled Caddy, 0 when exposed directly).
+# Only set this when the app port is NOT reachable from the internet, or clients could forge their IP.
+TRUSTED_PROXY_COUNT = int(os.environ.get("DJANGO_TRUSTED_PROXY_COUNT", "0"))
 
 LANGUAGE_CODE = "en-gb"
 TIME_ZONE = "Europe/London"
