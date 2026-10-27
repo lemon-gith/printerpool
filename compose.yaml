@@ -23,6 +23,21 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Same check an uptime monitor uses. Sent with the site's own hostname so ALLOWED_HOSTS accepts it.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import os, urllib.request as r
+          host = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost").split(",")[0].strip()
+          no_proxy = r.build_opener(r.ProxyHandler({}))  # talk to ourselves directly, never via a proxy
+          no_proxy.open(r.Request("http://127.0.0.1:8000/health/", headers={"Host": host}), timeout=5)
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   db:
     image: postgres:16-alpine
