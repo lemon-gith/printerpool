@@ -16,22 +16,25 @@
   {% if transitions %}
   <form method="post" action="{% url 'request_action' req.pk %}">
     {% csrf_token %}
-    {% if user.is_print_staff %}<p><label for="note">Note (optional, shown to the user)</label><textarea id="note" name="note" rows="2"></textarea></p>{% endif %}
+    {% if user.is_print_staff and req.user_id != user.pk %}<p><label for="note">Note (optional, shown to the user)</label><textarea id="note" name="note" rows="2"></textarea></p>{% endif %}
     {% for value, label in transitions %}
-      <button name="to_status" value="{{ value }}"
-        {% if value == "rejected" or value == "cancelled" or value == "recalled" %}class="secondary"{% endif %}
-        {% if value == "recalled" %}onclick="return confirm('Recall this request? It will be withdrawn and you can edit and resubmit it as a new request.')"{% elif value == "cancelled" %}onclick="return confirm('Cancel this request?')"{% endif %}>
-        {% if value == "approved" %}Approve{% elif value == "rejected" %}Reject{% elif value == "cancelled" %}Cancel request{% elif value == "completed" %}Mark completed{% elif value == "recalled" %}Recall &amp; edit{% else %}{{ label }}{% endif %}
-      </button>
+      {% if value == "approved" %}<button name="to_status" value="approved">Approve</button>
+      {% elif value == "completed" %}<button name="to_status" value="completed">Mark completed</button>
+      {% elif value == "rejected" %}<button name="to_status" value="rejected" class="secondary" onclick="return confirm('Reject this request? Any queued prints will be cancelled.')">Reject</button>
+      {% elif value == "recalled" %}<button name="to_status" value="recalled" class="secondary" onclick="return confirm('Recall this request? It will be withdrawn{% if req.prints.exists %} and any queued prints cancelled{% endif %}. You can then edit and resubmit it, or leave it withdrawn.')">Recall request</button>
+      {% endif %}
     {% endfor %}
   </form>
   {% endif %}
+  {% if blocked_reason %}<p class="muted">{{ blocked_reason }}</p>{% endif %}
 </div>
 
 <div class="grid2">
   <div class="card">
     <h2>Files</h2>
-    {% if req.files_available %}
+    {% if replaced_by and not files %}
+      <p class="muted">The files were carried over to <a href="{% url 'request_detail' replaced_by.pk %}">{{ replaced_by.title }}</a>.</p>
+    {% elif req.files_available %}
       <ul>{% for f in files %}<li><a href="{% url 'file_download' f.pk %}">{{ f.original_name }}</a> <span class="muted">{{ f.size|filesizeformat }}</span></li>{% endfor %}</ul>
       <p class="muted">Files expire {{ req.files_expire_at|date:"j M Y, H:i" }} ({{ req.files_expire_at|timeuntil }}).</p>
     {% else %}

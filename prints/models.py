@@ -20,8 +20,7 @@ class PrintRequest(models.Model):
         REJECTED = "rejected", "Rejected"
         IN_PROGRESS = "in_progress", "In progress"
         COMPLETED = "completed", "Completed"
-        CANCELLED = "cancelled", "Cancelled"
-        # Withdrawn by its owner to be edited and resubmitted as a new request (see `supersedes`).
+        # Withdrawn by its owner. They can edit and resubmit it as a new request (see `supersedes`), or leave it.
         RECALLED = "recalled", "Recalled"
 
     class Material(models.TextChoices):

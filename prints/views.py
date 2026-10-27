@@ -102,11 +102,8 @@ def request_create(request):
         if form.is_valid():
             data = dict(form.cleaned_data)
             files = data.pop("files")
-            keep_files = data.pop("keep_files", [])
             try:
-                req = services.submit_request(
-                    request.user, files=files, supersedes=source, keep_files=keep_files, **data
-                )
+                req = services.submit_request(request.user, files=files, supersedes=source, **data)
             except ValidationError as e:
                 form.add_error(None, e)
             else:
@@ -136,6 +133,7 @@ def request_detail(request, pk):
         "transitions": [(s, PrintRequest.Status(s).label) for s in services.allowed_request_transitions(request.user, req)],
         "owner_cap": services.cap_status(req.user),
         "can_queue_print": is_staff and req.status in (PrintRequest.Status.APPROVED, PrintRequest.Status.IN_PROGRESS),
+        "blocked_reason": services.request_blocked_reason(req) if req.status == PrintRequest.Status.IN_PROGRESS else None,
         "replaced_by": getattr(req, "replaced_by", None),
         "can_resubmit": (
             req.status == PrintRequest.Status.RECALLED
@@ -160,7 +158,9 @@ def request_action(request, pk):
             messages.error(request, str(e))
         else:
             if to_status == PrintRequest.Status.RECALLED:
-                messages.success(request, "Request recalled. Update the details below and resubmit.")
+                messages.success(
+                    request, "Request recalled. Edit and resubmit it below, or leave this page to keep it withdrawn."
+                )
                 return redirect(f"{reverse('request_create')}?from={req.pk}")
             messages.success(request, "Request updated.")
     return redirect("request_detail", pk=req.pk)

@@ -16,25 +16,25 @@ PS = Print.Status
 
 # --- File expiry -----------------------------------------------------------------------------
 EXPIRY_ON_SUBMIT = timedelta(days=30)  # untouched requests
-EXPIRY_AFTER_EVENT = timedelta(days=7)  # after rejection / cancellation / a print being set off
+EXPIRY_AFTER_EVENT = timedelta(days=7)  # after rejection / recall / a print being set off
 
-# Request statuses that end the request: they (re)start the 7-day file clock and cancel any queued prints.
-REQUEST_CLOSING_STATUSES = {RS.REJECTED, RS.CANCELLED, RS.RECALLED}
+# Request statuses that end the request early: they (re)start the 7-day file clock and cancel any queued
+# prints. Not allowed while something is physically printing; staff finish or cancel that print first.
+REQUEST_CLOSING_STATUSES = {RS.REJECTED, RS.RECALLED}
 # Print statuses that (re)start the 7-day clock when entered. Failed is included so that a
 # reprint after a failure still has its files.
 PRINT_STATUSES_SETTING_EXPIRY = {PS.PRINTING, PS.FAILED}
 
 # --- Allowed transitions: {from: {to: who}} ----------------------------------------------------
+# Vocabulary: owners *recall* requests, staff *reject* them, and *cancel* applies only to prints.
 STAFF = "staff"
 OWNER = "owner"
-OWNER_OR_STAFF = "owner_or_staff"
 
+# approved → in_progress happens automatically when the first print starts (see transition_print).
 REQUEST_TRANSITIONS = {
-    RS.SUBMITTED: {RS.APPROVED: STAFF, RS.REJECTED: STAFF, RS.RECALLED: OWNER, RS.CANCELLED: OWNER_OR_STAFF},
-    # approved → in_progress happens automatically when the first print starts (see transition_print),
-    # so an approved request has nothing printing yet and its owner can still recall it.
-    RS.APPROVED: {RS.REJECTED: STAFF, RS.RECALLED: OWNER, RS.CANCELLED: STAFF},
-    RS.IN_PROGRESS: {RS.COMPLETED: STAFF, RS.CANCELLED: STAFF},
+    RS.SUBMITTED: {RS.APPROVED: STAFF, RS.REJECTED: STAFF, RS.RECALLED: OWNER},
+    RS.APPROVED: {RS.REJECTED: STAFF, RS.RECALLED: OWNER},
+    RS.IN_PROGRESS: {RS.COMPLETED: STAFF, RS.REJECTED: STAFF, RS.RECALLED: OWNER},
 }
 
 # Ordered: this is also the button order in the UI.
@@ -48,16 +48,23 @@ def can_view_request(user, req):
     return user.is_authenticated and (user.is_print_staff or req.user_id == user.pk)
 
 
+def request_blocked_reason(req):
+    """Why the request can't be closed or completed right now, or None."""
+    if req.prints.filter(status=PS.PRINTING).exists():
+        return "A print is running. Staff need to finish or cancel it first."
+    return None
+
+
 def allowed_request_transitions(user, req):
     is_owner = req.user_id == user.pk
-    allowed = []
-    for to_status, who in REQUEST_TRANSITIONS.get(req.status, {}).items():
-        if (
-            (who == STAFF and user.is_print_staff)
-            or (who == OWNER and is_owner)
-            or (who == OWNER_OR_STAFF and (is_owner or user.is_print_staff))
-        ):
-            allowed.append(to_status)
+    options = REQUEST_TRANSITIONS.get(req.status, {})
+    allowed = [s for s, who in options.items() if (who == STAFF and user.is_print_staff) or (who == OWNER and is_owner)]
+    if not allowed:
+        return allowed
+    if request_blocked_reason(req):
+        allowed = [s for s in allowed if s not in REQUEST_CLOSING_STATUSES and s != RS.COMPLETED]
+    if RS.COMPLETED in allowed and req.prints.filter(status=PS.QUEUED).exists():
+        allowed.remove(RS.COMPLETED)  # finish or cancel the queued prints first
     return allowed
 
 
@@ -70,7 +77,7 @@ def _bump_expiry(req, now):
 def transition_request(req, new_status, actor, note=""):
     req = PrintRequest.objects.select_for_update().get(pk=req.pk)
     if new_status not in allowed_request_transitions(actor, req):
-        raise PermissionDenied(f"Cannot move request from {req.status} to {new_status}.")
+        raise PermissionDenied(request_blocked_reason(req) or f"Cannot move request from {req.status} to {new_status}.")
 
     now = timezone.now()
     old_status = req.status
@@ -166,15 +173,6 @@ def save_uploaded_files(req, uploaded_files):
         rf.save()
 
 
-def copy_request_files(req, source_files):
-    """Give `req` its own copies, so each request's files keep expiring on that request's own schedule."""
-    for src in source_files:
-        rf = RequestFile(request=req, original_name=src.original_name, size=src.size, sha256=src.sha256)
-        with src.file.open("rb") as handle:
-            rf.file.save(src.original_name, handle, save=False)
-        rf.save()
-
-
 def recall_source_for(user, pk):
     """The recalled request `user` may resubmit from, or None if there isn't a valid one."""
     return (
@@ -185,19 +183,32 @@ def recall_source_for(user, pk):
 
 
 @transaction.atomic
-def submit_request(user, *, files, supersedes=None, keep_files=(), **fields):
+def submit_request(user, *, files, supersedes=None, **fields):
+    """Create a request. When resubmitting a recalled one (`supersedes`) without uploading anything, the new
+    request takes over the original's files: the same stored files, now expiring on the new request's
+    schedule. Uploading anything replaces them instead, and the originals stay with the recalled request."""
+    take_over_files = False
     if supersedes is not None:
         # Lock the original so the same recalled request can't be resubmitted twice concurrently.
         locked = PrintRequest.objects.select_for_update().filter(pk=supersedes.pk).first()
         if locked is None or recall_source_for(user, supersedes.pk) is None:
             raise ValidationError("That request has already been resubmitted or can't be edited.")
-        if keep_files and not locked.files_available:
-            raise ValidationError("The original files have expired; please upload them again.")
+        if not files:
+            if not (locked.files_available and locked.files.exists()):
+                raise ValidationError("The original files have expired; please upload them again.")
+            take_over_files = True
+    elif not files:
+        raise ValidationError("A request needs at least one file.")
+
     req = PrintRequest.objects.create(user=user, supersedes=supersedes, **fields)
-    if keep_files:
-        copy_request_files(req, keep_files)
+    if take_over_files:
+        supersedes.files.update(request=req)
     save_uploaded_files(req, files)
-    note = f"Replaces recalled request “{supersedes.title}”" if supersedes else ""
+
+    note = ""
+    if supersedes is not None:
+        how = "files carried over" if take_over_files else "new files uploaded"
+        note = f"Replaces recalled request “{supersedes.title}” ({how})"
     StatusEvent.objects.create(request=req, to_status=RS.SUBMITTED, actor=user, note=note)
     return req
 

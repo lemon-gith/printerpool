@@ -16,7 +16,9 @@ class MultipleFileField(forms.FileField):
 
     def clean(self, data, initial=None):
         single_clean = super().clean
-        if not data and not self.required:
+        if not data:
+            if self.required:
+                raise forms.ValidationError(self.error_messages["required"], code="required")
             return []
         if isinstance(data, (list, tuple)):
             return [single_clean(d, initial) for d in data]
@@ -34,35 +36,25 @@ class PrintRequestForm(forms.ModelForm):
         widgets = {"notes": forms.Textarea(attrs={"rows": 4})}
 
     def __init__(self, *args, source=None, **kwargs):
-        """`source` is a recalled request being edited: its details pre-fill the form and its files can be kept."""
+        """`source` is a recalled request being edited: its details pre-fill the form, and if no files are
+        uploaded the new request takes over its files."""
         self.source = source
         if source is not None and "data" not in kwargs and not args:
             kwargs["initial"] = {f: getattr(source, f) for f in self.Meta.fields}
         super().__init__(*args, **kwargs)
-        if source is not None and source.files_available:
-            self.fields["keep_files"] = forms.ModelMultipleChoiceField(
-                queryset=source.files.all(),
-                initial=list(source.files.all()),
-                required=False,
-                widget=forms.CheckboxSelectMultiple,
-                label="Keep files from the original request",
-            )
+        self.can_reuse_files = source is not None and source.files_available and source.files.exists()
+        if self.can_reuse_files:
             self.fields["files"].required = False
-            self.fields["files"].label = "Add files"
-            self.order_fields(["title", "material", "colour", "notes", "keep_files", "files"])
-
-    def clean(self):
-        cleaned = super().clean()
-        files = cleaned.get("files") or []
-        kept = cleaned.get("keep_files") or []
-        if "files" in cleaned and not files and not kept:
-            raise forms.ValidationError("A request needs at least one file: keep an original one or upload a new one.")
-        if len(files) + len(kept) > settings.MAX_FILES_PER_REQUEST:
-            raise forms.ValidationError(f"At most {settings.MAX_FILES_PER_REQUEST} files per request.")
-        return cleaned
+            self.fields["files"].label = "Replacement files (optional)"
+            self.fields["files"].help_text = (
+                "Leave empty to keep the current files. Uploading anything replaces all of them. "
+                + self.fields["files"].help_text
+            )
 
     def clean_files(self):
         files = self.cleaned_data["files"]
+        if len(files) > settings.MAX_FILES_PER_REQUEST:
+            raise forms.ValidationError(f"At most {settings.MAX_FILES_PER_REQUEST} files per request.")
         errors = []
         for f in files:
             try:

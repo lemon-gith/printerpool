@@ -4,13 +4,18 @@
 <div class="card">
   {% if source %}
   <h1>Edit and resubmit</h1>
-  <p class="muted">You're editing <a href="{% url 'request_detail' source.pk %}">{{ source.title }}</a>, which has been recalled. Submitting creates a new request that replaces it and goes back into the queue for approval.</p>
+  <p class="muted">You're editing <a href="{% url 'request_detail' source.pk %}">{{ source.title }}</a>, which has been recalled. Submitting creates a new request that replaces it and goes back into the queue for approval. If you'd rather not resubmit, just leave this page; the recalled request stays withdrawn.</p>
   {% else %}
   <h1>New print request</h1>
   {% endif %}
   {% include "prints/_cap.html" %}
-  {% if source and not source.files_available %}
-  <p class="muted">The original files have expired, so please upload them again.</p>
+  {% if source %}
+    {% if form.can_reuse_files %}
+    <p><strong>Current files</strong>, carried over unless you upload replacements:</p>
+    <ul>{% for f in source.files.all %}<li>{{ f.original_name }} <span class="muted">{{ f.size|filesizeformat }}</span></li>{% endfor %}</ul>
+    {% else %}
+    <p class="muted">The original files have expired, so please upload them again.</p>
+    {% endif %}
   {% endif %}
   <form method="post" enctype="multipart/form-data">
     {% csrf_token %}

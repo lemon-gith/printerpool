@@ -77,9 +77,10 @@ class WorkflowTests(TestCase):
         with self.assertRaises(PermissionDenied):
             services.transition_request(self.submit(), RS.APPROVED, self.student)
 
-    def test_owner_can_cancel_submitted(self):
-        req = services.transition_request(self.submit(), RS.CANCELLED, self.student)
-        self.assertEqual(req.status, RS.CANCELLED)
+    def test_request_actions_use_clear_vocabulary(self):
+        req = self.submit()
+        self.assertEqual(services.allowed_request_transitions(self.student, req), [RS.RECALLED])
+        self.assertEqual(services.allowed_request_transitions(self.staff, req), [RS.APPROVED, RS.REJECTED])
 
     def test_other_user_cannot_see_request_or_file(self):
         req = self.submit()
@@ -197,12 +198,33 @@ class RecallTests(TestCase):
         self.assertNotIn(RS.RECALLED, services.allowed_request_transitions(self.other, self.req))
         self.assertIn(RS.RECALLED, services.allowed_request_transitions(self.student, self.req))
 
-    def test_cannot_recall_once_printing(self):
-        services.transition_request(self.req, RS.APPROVED, self.staff)
+    def start_print(self, finish=None):
+        if self.req.status == RS.SUBMITTED:
+            services.transition_request(self.req, RS.APPROVED, self.staff)
         job = services.create_print(self.req, self.staff, printer=None, est_duration_minutes=5, est_filament_g=5)
         services.transition_print(job, PS.PRINTING, self.staff)
+        if finish:
+            services.transition_print(job, finish, self.staff)
         self.req.refresh_from_db()
-        self.assertNotIn(RS.RECALLED, services.allowed_request_transitions(self.student, self.req))
+        return job
+
+    def test_nothing_closes_while_a_print_is_running(self):
+        self.start_print()
+        self.assertEqual(services.allowed_request_transitions(self.student, self.req), [])
+        self.assertEqual(services.allowed_request_transitions(self.staff, self.req), [])
+        with self.assertRaisesMessage(PermissionDenied, "A print is running"):
+            services.transition_request(self.req, RS.RECALLED, self.student)
+
+    def test_can_recall_in_progress_request_once_nothing_is_printing(self):
+        self.start_print(finish=PS.FAILED)
+        self.assertEqual(self.req.status, RS.IN_PROGRESS)
+        self.assertIn(RS.RECALLED, services.allowed_request_transitions(self.student, self.req))
+
+    def test_complete_needs_queued_prints_dealt_with(self):
+        self.start_print(finish=PS.SUCCEEDED)
+        self.assertIn(RS.COMPLETED, services.allowed_request_transitions(self.staff, self.req))
+        services.create_print(self.req, self.staff, printer=None, est_duration_minutes=5, est_filament_g=5)
+        self.assertNotIn(RS.COMPLETED, services.allowed_request_transitions(self.staff, self.req))
 
     def test_recall_cancels_queued_prints_and_sets_expiry(self):
         services.transition_request(self.req, RS.APPROVED, self.staff)
@@ -214,54 +236,73 @@ class RecallTests(TestCase):
         self.assertEqual((self.req.status, job.status), (RS.RECALLED, PS.CANCELLED))
         self.assertAlmostEqual(self.req.files_expire_at, timezone.now() + timedelta(days=7), delta=timedelta(seconds=5))
 
-    def test_edit_form_prefilled_and_resubmit_copies_kept_files(self):
+    def resubmit(self, **data):
+        return self.client.post(f"{reverse('request_create')}?from={self.req.pk}", {"title": "New", "material": "petg", **data})
+
+    def test_resubmit_without_upload_takes_over_the_same_files(self):
         self.recall()
         page = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
         self.assertContains(page, 'value="Old"')
-        old_file = self.req.files.get()
-        resp = self.client.post(
-            f"{reverse('request_create')}?from={self.req.pk}",
-            {"title": "New", "material": "petg", "keep_files": [old_file.pk], "files": [stl("extra.stl")]},
-        )
+        self.assertContains(page, "orig.stl")
+        original = self.req.files.get()
+
+        resp = self.resubmit()
+
         new = PrintRequest.objects.get(title="New")
         self.assertRedirects(resp, reverse("request_detail", args=[new.pk]))
-        self.assertEqual(new.supersedes, self.req)
-        self.assertEqual((new.status, new.material), (RS.SUBMITTED, "petg"))
-        names = sorted(new.files.values_list("original_name", flat=True))
-        self.assertEqual(names, ["extra.stl", "orig.stl"])
-        copy = new.files.get(original_name="orig.stl")
-        self.assertNotEqual(copy.file.name, old_file.file.name)  # its own copy, expiring on its own schedule
-        self.assertEqual(copy.sha256, old_file.sha256)
+        self.assertEqual((new.supersedes, new.status, new.material), (self.req, RS.SUBMITTED, "petg"))
+        moved = new.files.get()
+        self.assertEqual((moved.pk, moved.file.name), (original.pk, original.file.name))  # same file, not a copy
+        self.assertFalse(self.req.files.exists())
+        self.assertAlmostEqual(new.files_expire_at, timezone.now() + timedelta(days=30), delta=timedelta(seconds=5))
+        self.assertContains(self.client.get(reverse("request_detail", args=[self.req.pk])), "carried over to")
+
+        # The recalled request's own expiry no longer touches the file.
+        PrintRequest.objects.filter(pk=self.req.pk).update(files_expire_at=timezone.now() - timedelta(minutes=1))
+        services.purge_expired_files()
+        self.assertTrue(moved.file.storage.exists(moved.file.name))
+
+    def test_uploading_replaces_files_and_leaves_originals_behind(self):
+        self.recall()
+        original = self.req.files.get()
+        self.resubmit(files=[stl("v2.stl")])
+        new = PrintRequest.objects.get(title="New")
+        self.assertEqual(list(new.files.values_list("original_name", flat=True)), ["v2.stl"])
+        self.assertEqual(self.req.files.get(), original)  # still governed by the recalled request
+
+    def test_expired_originals_must_be_reuploaded(self):
+        self.recall()
+        PrintRequest.objects.filter(pk=self.req.pk).update(files_expire_at=timezone.now() - timedelta(minutes=1))
+        resp = self.resubmit()
+        self.assertContains(resp, "This field is required")
+        self.assertFalse(PrintRequest.objects.filter(title="New").exists())
 
     def test_cannot_resubmit_twice(self):
         self.recall()
-        url = f"{reverse('request_create')}?from={self.req.pk}"
-        self.client.post(url, {"title": "A", "material": "pla", "keep_files": [self.req.files.get().pk]})
-        resp = self.client.get(url)
+        self.resubmit()
+        resp = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
         self.assertRedirects(resp, reverse("request_create"))
         self.assertEqual(PrintRequest.objects.filter(supersedes=self.req).count(), 1)
 
-    def test_needs_at_least_one_file(self):
-        self.recall()
-        resp = self.client.post(f"{reverse('request_create')}?from={self.req.pk}", {"title": "A", "material": "pla"})
-        self.assertContains(resp, "at least one file")
+    def test_new_request_needs_a_file(self):
+        self.client.force_login(self.student)
+        resp = self.client.post(reverse("request_create"), {"title": "A", "material": "pla"})
+        self.assertContains(resp, "This field is required")
 
     def test_replaced_request_hidden_from_default_list(self):
         self.recall()
-        self.client.post(f"{reverse('request_create')}?from={self.req.pk}", {"title": "New", "material": "pla", "keep_files": [self.req.files.get().pk]})
+        self.resubmit()
         titles = [r.title for r in self.client.get("/").context["page"].object_list]
         self.assertEqual(titles, ["New"])
         recalled = [r.title for r in self.client.get("/", {"status": "recalled"}).context["page"].object_list]
         self.assertEqual(recalled, ["Old"])
 
-    def test_other_user_cannot_resubmit_or_steal_files(self):
+    def test_other_user_cannot_resubmit(self):
         self.recall()
         self.client.force_login(self.other)
         resp = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
         self.assertRedirects(resp, reverse("request_create"))
-        # A plain new request can't pick files from someone else's request either.
-        self.client.post(reverse("request_create"), {"title": "X", "material": "pla", "keep_files": [self.req.files.get().pk]})
-        self.assertFalse(PrintRequest.objects.filter(title="X").exists())
+        self.assertEqual(self.req.files.count(), 1)
 
 
 class DashboardTests(TestCase):
