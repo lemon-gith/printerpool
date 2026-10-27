@@ -173,13 +173,17 @@ def transition_print(job, new_status, actor, *, filament_used_g=None, note=""):
 
 
 # --- Uploads --------------------------------------------------------------------------------
+def _sha256(upload):
+    digest = hashlib.sha256()
+    for chunk in upload.chunks():
+        digest.update(chunk)
+    upload.seek(0)
+    return digest.hexdigest()
+
+
 def save_uploaded_files(req, uploaded_files):
-    for upload in uploaded_files:
-        digest = hashlib.sha256()
-        for chunk in upload.chunks():
-            digest.update(chunk)
-        upload.seek(0)
-        rf = RequestFile(request=req, original_name=upload.name[:255], size=upload.size, sha256=digest.hexdigest())
+    for upload, sha in uploaded_files:
+        rf = RequestFile(request=req, original_name=upload.name[:255], size=upload.size, sha256=sha)
         rf.file.save(upload.name, upload, save=False)
         rf.save()
 
@@ -194,32 +198,61 @@ def recall_source_for(user, pk):
 
 
 @transaction.atomic
-def submit_request(user, *, files, supersedes=None, **fields):
-    """Create a request. When resubmitting a recalled one (`supersedes`) without uploading anything, the new
-    request takes over the original's files: the same stored files, now expiring on the new request's
-    schedule. Uploading anything replaces them instead, and the originals stay with the recalled request."""
-    take_over_files = False
+def submit_request(user, *, files, supersedes=None, keep_files=(), **fields):
+    """Create a request from new uploads (`files`).
+
+    When resubmitting a recalled request (`supersedes`), `keep_files` are the original files the user kept.
+    Those are taken over by the new request: the same stored files, now expiring on the new request's
+    schedule. An upload identical to an original file (same SHA-256) also takes over that original instead
+    of storing a duplicate. Originals that weren't kept stay with the recalled request and expire with it.
+    """
+    originals = {}  # sha256 -> RequestFile, for the recalled request's files that are still available
+    taken_over = set()
     if supersedes is not None:
         # Lock the original so the same recalled request can't be resubmitted twice concurrently.
         locked = PrintRequest.objects.select_for_update().filter(pk=supersedes.pk).first()
         if locked is None or recall_source_for(user, supersedes.pk) is None:
             raise ValidationError("That request has already been resubmitted or can't be edited.")
-        if not files:
-            if not (locked.files_available and locked.files.exists()):
-                raise ValidationError("The original files have expired; please upload them again.")
-            take_over_files = True
-    elif not files:
+        available = list(locked.files.all()) if locked.files_available else []
+        originals = {rf.sha256: rf for rf in available}
+        available_ids = {rf.pk for rf in available}
+        kept_ids = {rf.pk for rf in keep_files}
+        if not kept_ids <= available_ids:
+            raise ValidationError("Some of the original files are no longer available; please upload them again.")
+        taken_over |= kept_ids
+    elif keep_files:
+        raise ValidationError("There are no original files to keep.")
+
+    new_uploads = []
+    seen = {rf.sha256 for rf in originals.values() if rf.pk in taken_over}
+    for upload in files:
+        sha = _sha256(upload)
+        if sha in seen:
+            continue  # the same file twice: once is enough
+        seen.add(sha)
+        if sha in originals:
+            taken_over.add(originals[sha].pk)  # re-uploaded an original: inherit it rather than duplicate it
+        else:
+            new_uploads.append((upload, sha))
+
+    if not taken_over and not new_uploads:
         raise ValidationError("A request needs at least one file.")
+    if len(taken_over) + len(new_uploads) > settings.MAX_FILES_PER_REQUEST:
+        raise ValidationError(f"At most {settings.MAX_FILES_PER_REQUEST} files per request.")
 
     req = PrintRequest.objects.create(user=user, supersedes=supersedes, **fields)
-    if take_over_files:
-        supersedes.files.update(request=req)
-    save_uploaded_files(req, files)
+    if taken_over:
+        RequestFile.objects.filter(pk__in=taken_over, request=supersedes).update(request=req)
+    save_uploaded_files(req, new_uploads)
 
     note = ""
     if supersedes is not None:
-        how = "files carried over" if take_over_files else "new files uploaded"
-        note = f"Replaces recalled request “{supersedes.title}” ({how})"
+        parts = []
+        if taken_over:
+            parts.append(f"{len(taken_over)} original file(s) carried over")
+        if new_uploads:
+            parts.append(f"{len(new_uploads)} new file(s)")
+        note = f"Replaces recalled request “{supersedes.title}” ({', '.join(parts)})"
     StatusEvent.objects.create(request=req, to_status=RS.SUBMITTED, actor=user, note=note)
     notify("staff_new_request", req, actor=user)
     return req

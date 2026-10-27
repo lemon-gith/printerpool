@@ -45,6 +45,17 @@
     .notice { background:#eef3ff; border-left:3px solid var(--accent); padding:.6rem .8rem; border-radius:4px; }
     .address { border-top:1px solid var(--line); padding:.5rem 0 .75rem; }
     .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+    .file-picker { border:1px solid var(--line); border-radius:6px; padding:.5rem 1rem; margin:.75rem 0; }
+    .file-picker legend { font-weight:600; padding:0 .25rem; }
+    .chips { list-style:none; padding:0; margin:.25rem 0; display:flex; flex-wrap:wrap; gap:.4rem; }
+    .chip { display:inline-flex; align-items:center; gap:.35rem; background:#e8ecf2; border-radius:999px; padding:.2rem .35rem .2rem .7rem; font-size:.9rem; }
+    .chip label { font-weight:400; display:inline; cursor:pointer; }
+    .chip.removed .chip-name { text-decoration:line-through; color:var(--muted); }
+    .chip.invalid { background:#fbe3e1; }
+    .chip-x { background:transparent; color:var(--fg); border:0; padding:0 .4rem; border-radius:999px; line-height:1.4; font-size:1rem; cursor:pointer; }
+    .chip-x:hover, .chip-x:focus-visible { background:rgba(0,0,0,.1); }
+    .chip-x.undo { font-size:.8rem; color:var(--accent); }
+    .js .file-picker .chip input[type=checkbox] { position:absolute; opacity:0; pointer-events:none; }
     footer.wrap { padding-top:0; padding-bottom:2rem; }
     .pager { display:flex; gap:1rem; align-items:center; justify-content:center; margin-top:.75rem; }
   </style>

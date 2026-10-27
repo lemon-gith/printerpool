@@ -1,7 +1,7 @@
 from django import forms
 from django.conf import settings
 
-from .models import Print, Printer, PrintRequest
+from .models import Print, Printer, PrintRequest, RequestFile
 from .validators import validate_model_file
 
 
@@ -26,9 +26,12 @@ class MultipleFileField(forms.FileField):
 
 
 class PrintRequestForm(forms.ModelForm):
-    files = MultipleFileField(
-        help_text=f"STL or 3MF, up to {settings.MAX_UPLOAD_MB} MB each, max {settings.MAX_FILES_PER_REQUEST} files."
-    )
+    # New uploads. Not required on its own: a resubmitted request may only keep original files.
+    files = MultipleFileField(required=False)
+    # Original files of a recalled request that the user is keeping (only present when editing one).
+    keep_files = forms.ModelMultipleChoiceField(queryset=RequestFile.objects.none(), required=False)
+
+    files_help = f"STL or 3MF, up to {settings.MAX_UPLOAD_MB} MB each, max {settings.MAX_FILES_PER_REQUEST} files."
 
     class Meta:
         model = PrintRequest
@@ -36,25 +39,37 @@ class PrintRequestForm(forms.ModelForm):
         widgets = {"notes": forms.Textarea(attrs={"rows": 4})}
 
     def __init__(self, *args, source=None, **kwargs):
-        """`source` is a recalled request being edited: its details pre-fill the form, and if no files are
-        uploaded the new request takes over its files."""
+        """`source` is a recalled request being edited: its details pre-fill the form and its files start out
+        kept; the user can remove any of them and add new ones."""
         self.source = source
         if source is not None and "data" not in kwargs and not args:
             kwargs["initial"] = {f: getattr(source, f) for f in self.Meta.fields}
         super().__init__(*args, **kwargs)
-        self.can_reuse_files = source is not None and source.files_available and source.files.exists()
-        if self.can_reuse_files:
-            self.fields["files"].required = False
-            self.fields["files"].label = "Replacement files (optional)"
-            self.fields["files"].help_text = (
-                "Leave empty to keep the current files. Uploading anything replaces all of them. "
-                + self.fields["files"].help_text
-            )
+        self.original_files = list(source.files.all()) if source is not None and source.files_available else []
+        if self.original_files:
+            self.fields["keep_files"].queryset = source.files.all()
+        else:
+            del self.fields["keep_files"]
+
+    def original_file_choices(self):
+        """(file, kept?) for each original file, so the template can render them with their current state."""
+        if self.is_bound:
+            kept = set(self.data.getlist("keep_files"))
+            return [(rf, str(rf.pk) in kept) for rf in self.original_files]
+        return [(rf, True) for rf in self.original_files]
+
+    def clean(self):
+        cleaned = super().clean()
+        files = cleaned.get("files") or []
+        kept = cleaned.get("keep_files") or []
+        if "files" in cleaned and not files and not kept:
+            raise forms.ValidationError("A request needs at least one file.")
+        if len(files) + len(kept) > settings.MAX_FILES_PER_REQUEST:
+            raise forms.ValidationError(f"At most {settings.MAX_FILES_PER_REQUEST} files per request.")
+        return cleaned
 
     def clean_files(self):
         files = self.cleaned_data["files"]
-        if len(files) > settings.MAX_FILES_PER_REQUEST:
-            raise forms.ValidationError(f"At most {settings.MAX_FILES_PER_REQUEST} files per request.")
         errors = []
         for f in files:
             try:

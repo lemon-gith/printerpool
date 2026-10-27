@@ -1,5 +1,6 @@
 from functools import wraps
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -102,8 +103,11 @@ def request_create(request):
         if form.is_valid():
             data = dict(form.cleaned_data)
             files = data.pop("files")
+            keep_files = data.pop("keep_files", [])
             try:
-                req = services.submit_request(request.user, files=files, supersedes=source, **data)
+                req = services.submit_request(
+                    request.user, files=files, supersedes=source, keep_files=keep_files, **data
+                )
             except ValidationError as e:
                 form.add_error(None, e)
             else:
@@ -114,7 +118,14 @@ def request_create(request):
     return render(
         request,
         "prints/request_form.html",
-        {"form": form, "source": source, "cap": services.cap_status(request.user)},
+        {
+            "form": form,
+            "source": source,
+            "cap": services.cap_status(request.user),
+            "max_files": settings.MAX_FILES_PER_REQUEST,
+            "max_upload_mb": settings.MAX_UPLOAD_MB,
+            "extensions": ",".join(f".{e}" for e in settings.ALLOWED_MODEL_EXTENSIONS),
+        },
     )
 
 

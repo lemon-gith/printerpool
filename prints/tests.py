@@ -2,6 +2,7 @@ import shutil
 import struct
 import tempfile
 from datetime import timedelta
+from unittest import mock
 
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -11,7 +12,7 @@ from django.utils import timezone
 
 from accounts.models import User
 from prints import services
-from prints.models import Print, PrintRequest
+from prints.models import Print, PrintRequest, RequestFile
 
 RS, PS = PrintRequest.Status, Print.Status
 MEDIA = tempfile.mkdtemp()
@@ -21,8 +22,9 @@ def binary_stl(triangles=2):
     return b"\0" * 80 + struct.pack("<I", triangles) + b"\0" * (50 * triangles)
 
 
-def stl(name="part.stl"):
-    return SimpleUploadedFile(name, binary_stl(), content_type="model/stl")
+def stl(name="part.stl", triangles=2):
+    """A valid binary STL; vary `triangles` to get files with different contents."""
+    return SimpleUploadedFile(name, binary_stl(triangles), content_type="model/stl")
 
 
 @override_settings(
@@ -236,10 +238,21 @@ class RecallTests(TestCase):
         self.assertEqual((self.req.status, job.status), (RS.RECALLED, PS.CANCELLED))
         self.assertAlmostEqual(self.req.files_expire_at, timezone.now() + timedelta(days=7), delta=timedelta(seconds=5))
 
-    def resubmit(self, **data):
+    def resubmit(self, keep=None, **data):
+        """Post the edit form the way the browser does: `keep` lists original files still ticked (default: all)."""
+        if keep is None:
+            keep = list(self.req.files.all())
+        data.setdefault("keep_files", [rf.pk for rf in keep])
         return self.client.post(f"{reverse('request_create')}?from={self.req.pk}", {"title": "New", "material": "petg", **data})
 
-    def test_resubmit_without_upload_takes_over_the_same_files(self):
+    def three_file_request(self):
+        self.req = services.submit_request(
+            self.student, files=[stl("a.stl", 1), stl("b.stl", 2), stl("c.stl", 3)], title="Multi", material="pla"
+        )
+        self.recall()
+        return {rf.original_name: rf for rf in self.req.files.all()}
+
+    def test_resubmit_unchanged_takes_over_the_same_files(self):
         self.recall()
         page = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
         self.assertContains(page, 'value="Old"')
@@ -262,19 +275,60 @@ class RecallTests(TestCase):
         services.purge_expired_files()
         self.assertTrue(moved.file.storage.exists(moved.file.name))
 
-    def test_uploading_replaces_files_and_leaves_originals_behind(self):
-        self.recall()
-        original = self.req.files.get()
-        self.resubmit(files=[stl("v2.stl")])
+    def test_remove_one_original_and_add_a_new_file(self):
+        files = self.three_file_request()
+        self.resubmit(keep=[files["a.stl"], files["c.stl"]], files=[stl("d.stl", 4)])
+
         new = PrintRequest.objects.get(title="New")
-        self.assertEqual(list(new.files.values_list("original_name", flat=True)), ["v2.stl"])
-        self.assertEqual(self.req.files.get(), original)  # still governed by the recalled request
+        by_name = {rf.original_name: rf for rf in new.files.all()}
+        self.assertEqual(sorted(by_name), ["a.stl", "c.stl", "d.stl"])
+        self.assertEqual(by_name["a.stl"].pk, files["a.stl"].pk)  # kept files keep their ids
+        self.assertEqual(by_name["c.stl"].pk, files["c.stl"].pk)
+        self.assertNotIn(by_name["d.stl"].pk, {rf.pk for rf in files.values()})  # new upload, new id
+        self.assertEqual(list(self.req.files.all()), [files["b.stl"]])  # removed file stays with the recalled request
+
+    def test_reuploading_an_original_inherits_it_instead_of_duplicating(self):
+        files = self.three_file_request()
+        stored_before = RequestFile.objects.count()
+        # User removed b.stl, then uploaded the very same file again (different name, same bytes).
+        self.resubmit(keep=[files["a.stl"]], files=[stl("b-again.stl", 2)])
+        new = PrintRequest.objects.get(title="New")
+        self.assertEqual(sorted(new.files.values_list("pk", flat=True)), sorted([files["a.stl"].pk, files["b.stl"].pk]))
+        self.assertEqual(RequestFile.objects.count(), stored_before)  # nothing new stored
+
+    def test_same_file_twice_is_stored_once(self):
+        self.client.force_login(self.student)
+        self.client.post(reverse("request_create"), {"title": "Dup", "material": "pla", "files": [stl("x.stl", 5), stl("y.stl", 5)]})
+        self.assertEqual(PrintRequest.objects.get(title="Dup").files.count(), 1)
+
+    def test_removing_every_file_is_refused(self):
+        self.recall()
+        resp = self.resubmit(keep=[])
+        self.assertContains(resp, "needs at least one file")
+        self.assertFalse(PrintRequest.objects.filter(title="New").exists())
+
+    def test_cannot_keep_files_from_another_request(self):
+        theirs = services.submit_request(self.other, files=[stl("theirs.stl", 9)], title="Theirs", material="pla")
+        self.recall()
+        resp = self.resubmit(keep_files=[theirs.files.get().pk])
+        self.assertEqual(resp.status_code, 200)  # form error, not a submission
+        self.assertFalse(PrintRequest.objects.filter(title="New").exists())
+        self.assertEqual(theirs.files.count(), 1)
+
+    def test_file_limit_counts_kept_and_new(self):
+        files = self.three_file_request()
+        with self.settings(MAX_FILES_PER_REQUEST=3):
+            resp = self.resubmit(files=[stl("d.stl", 4)])
+        self.assertContains(resp, "At most 3 files")
+        self.assertEqual(len(files), self.req.files.count())
 
     def test_expired_originals_must_be_reuploaded(self):
         self.recall()
         PrintRequest.objects.filter(pk=self.req.pk).update(files_expire_at=timezone.now() - timedelta(minutes=1))
-        resp = self.resubmit()
-        self.assertContains(resp, "This field is required")
+        page = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
+        self.assertContains(page, "original files have expired")
+        resp = self.resubmit(keep=[], keep_files=[self.req.files.get().pk])
+        self.assertEqual(resp.status_code, 200)
         self.assertFalse(PrintRequest.objects.filter(title="New").exists())
 
     def test_cannot_resubmit_twice(self):
@@ -287,7 +341,7 @@ class RecallTests(TestCase):
     def test_new_request_needs_a_file(self):
         self.client.force_login(self.student)
         resp = self.client.post(reverse("request_create"), {"title": "A", "material": "pla"})
-        self.assertContains(resp, "This field is required")
+        self.assertContains(resp, "needs at least one file")
 
     def test_replaced_request_hidden_from_default_list(self):
         self.recall()
@@ -303,6 +357,28 @@ class RecallTests(TestCase):
         resp = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
         self.assertRedirects(resp, reverse("request_create"))
         self.assertEqual(self.req.files.count(), 1)
+
+
+@override_settings(CONTACT_STAFF_EMAILS=["lab@uni.ac.uk", "tech@uni.ac.uk"], CONTACT_ADMIN_EMAILS=["boss@uni.ac.uk"])
+class ContactLinkTests(TestCase):
+    def test_multiple_addresses_in_one_mailto(self):
+        self.client.force_login(User.objects.create_user("s", password="x"))
+        page = self.client.get("/")
+        self.assertContains(page, 'href="mailto:lab@uni.ac.uk,tech@uni.ac.uk?subject=')
+        self.assertNotContains(page, "boss@uni.ac.uk")  # admin contact is for staff only
+
+    def test_staff_see_admin_contact(self):
+        self.client.force_login(User.objects.create_user("t", password="x", role=User.Role.STAFF))
+        self.assertContains(self.client.get("/"), 'href="mailto:boss@uni.ac.uk?subject=')
+
+    def test_invalid_address_fails_at_startup(self):
+        from django.core.exceptions import ImproperlyConfigured
+
+        from config.settings import env_emails
+
+        with mock.patch.dict("os.environ", {"X_EMAILS": "ok@uni.ac.uk, not-an-email"}):
+            with self.assertRaisesMessage(ImproperlyConfigured, "not-an-email"):
+                env_emails("X_EMAILS")
 
 
 class DashboardTests(TestCase):

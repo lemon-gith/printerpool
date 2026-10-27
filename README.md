@@ -43,8 +43,11 @@ A request can't be recalled, rejected or completed while one of its prints is ru
 
 Requests are immutable. To change one, its owner clicks **Recall request**. The request becomes *Recalled* and its files are set to expire in 7 days. The owner is then taken to a pre-filled form; leaving that page without resubmitting simply keeps the request withdrawn. Submitting creates a **new** request that links back to the one it replaces and goes through approval again.
 
-- **No files uploaded:** the new request **takes over the original's files**. They're the same stored files, now expiring on the new request's schedule (30 days from submission, and so on).
-- **Any file uploaded:** the uploads **replace** all of the originals. The original files stay with the recalled request and expire 7 days after the recall.
+The form starts with the original files listed as bubbles. Each has an **×** to remove it (with *undo*), and more files can be added (new uploads have an × too, on any request form). The form submits the IDs of the originals still kept:
+
+- **Kept originals** are **taken over** by the new request: same file IDs, same stored files, now expiring on the new request's schedule (30 days from submission, and so on).
+- **New uploads** get new file IDs. If an upload is byte-for-byte identical to one of the originals (same SHA-256), the new request inherits that original instead of storing a duplicate. Picking the same file twice stores it once.
+- **Removed originals** stay with the recalled request and expire 7 days after the recall.
 
 Replaced requests are hidden from the main list but stay reachable from the new request's page and via the *Recalled* filter.
 
@@ -101,7 +104,7 @@ Use port **587** (STARTTLS): Hetzner blocks outgoing ports 25 and 465 on new acc
 
 ## Contact links
 
-Set `CONTACT_STAFF_EMAIL` and/or `CONTACT_ADMIN_EMAIL` in `.env` to show plain `mailto:` links. They open the person's own email app, and the server sends nothing. Everyone sees *Contact staff*; staff and admins also see *Contact an admin*. On their own request page, users get an *Email staff* link with the request's title and URL pre-filled. Leave a setting blank to hide its link.
+Set `CONTACT_STAFF_EMAILS` and/or `CONTACT_ADMIN_EMAILS` in `.env` to show plain `mailto:` links. Each takes one address or a comma-separated list (`a@uni.ac.uk,b@uni.ac.uk`), and the link then opens one email addressed to all of them. Invalid addresses stop the app at startup with a clear error. They open the person's own email app, and the server sends nothing. Everyone sees *Contact staff*; staff and admins also see *Contact an admin*. On their own request page, users get an *Email staff* link with the request's title and URL pre-filled. Leave a setting blank to hide its link.
 
 ## Live updates
 
