@@ -1,0 +1,63 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: printpool
+          POSTGRES_USER: printpool
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U printpool -d printpool"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-not-secret
+      POSTGRES_HOST: localhost
+      POSTGRES_DB: printpool
+      POSTGRES_USER: printpool
+      POSTGRES_PASSWORD: ci-only-password
+      MEDIA_ROOT: /tmp/printpool-media
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: mkdir -p "$MEDIA_ROOT"
+      - name: Check for missing migrations
+        run: python manage.py makemigrations --check --dry-run
+      - name: Django system checks
+        run: python manage.py check
+      - name: Production settings checklist
+        run: |
+          DJANGO_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')" \
+          DJANGO_SECURE=1 DJANGO_ALLOWED_HOSTS=print.example.ac.uk \
+          python manage.py check --deploy --fail-level WARNING
+      - name: Run tests
+        run: python manage.py test --verbosity 2
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the production image
+        run: docker build -t printpool-app .
