@@ -13,6 +13,19 @@ def env_list(name, default=""):
     return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
 
 
+def env_emails(name):
+    from django.core.exceptions import ImproperlyConfigured
+    from django.core.validators import EmailValidator
+
+    addresses = env_list(name)
+    for address in addresses:
+        try:
+            EmailValidator()(address)
+        except Exception:
+            raise ImproperlyConfigured(f"{name} contains an invalid email address: {address!r}")
+    return addresses
+
+
 SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 DEBUG = env_bool("DJANGO_DEBUG")
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -167,9 +180,10 @@ else:
 EMAIL_TIMEOUT = 10
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "PrintPool <printpool@localhost>")
 
-# Optional contact addresses, shown as mailto: links. Users see the staff one; staff also see the admin one.
-CONTACT_STAFF_EMAIL = os.environ.get("CONTACT_STAFF_EMAIL", "").strip()
-CONTACT_ADMIN_EMAIL = os.environ.get("CONTACT_ADMIN_EMAIL", "").strip()
+# Optional contact addresses (comma-separated lists), shown as mailto: links addressed to all of them.
+# Everyone sees the staff link; staff and admins also see the admin link.
+CONTACT_STAFF_EMAILS = env_emails("CONTACT_STAFF_EMAILS")
+CONTACT_ADMIN_EMAILS = env_emails("CONTACT_ADMIN_EMAILS")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
