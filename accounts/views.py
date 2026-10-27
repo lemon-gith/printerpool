@@ -4,7 +4,7 @@ from django.urls import reverse_lazy
 
 
 class PasswordChangeView(auth_views.PasswordChangeView):
-    success_url = reverse_lazy("dashboard")
+    success_url = reverse_lazy("account")
 
     def form_valid(self, form):
         response = super().form_valid(form)

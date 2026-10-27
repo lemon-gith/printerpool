@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Account · PrintPool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Account</h1>
+  <p>Logged in as <strong>{{ user.username }}</strong> ({{ user.get_role_display }}). <a href="{% url 'password_change' %}">Change password</a></p>
+</div>
+
+<div class="card">
+  <h2>Email notifications</h2>
+  <p class="notice">
+    Adding an email address is <strong>optional</strong>, and email notifications are <strong>opt-in</strong>:
+    a new address gets nothing until you confirm it with a one-time code <em>and</em> choose which notifications
+    it should receive. Everything is off by default, and you can change it or remove the address at any time.
+  </p>
+
+  {% for address in addresses %}
+  <div class="address">
+    <h3>{{ address.email }}
+      {% if address.is_verified %}<span class="badge s-approved">Verified</span>{% else %}<span class="badge s-submitted">Awaiting code</span>{% endif %}
+    </h3>
+
+    {% if address.is_verified %}
+      <form method="post" action="{% url 'email_preferences' address.pk %}">
+        {% csrf_token %}
+        {{ address.prefs_form.as_p }}
+        <p><button>Save notifications</button></p>
+      </form>
+    {% else %}
+      <form method="post" action="{% url 'email_verify' address.pk %}" class="filters">
+        {% csrf_token %}
+        <label for="code-{{ address.pk }}" class="sr-only">6-digit code</label>
+        <input type="text" id="code-{{ address.pk }}" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" style="width:9rem" required>
+        <button>Confirm</button>
+      </form>
+      <form method="post" action="{% url 'email_resend' address.pk %}" class="inline-form">
+        {% csrf_token %}<button class="secondary">Send a new code</button>
+      </form>
+    {% endif %}
+    <form method="post" action="{% url 'email_remove' address.pk %}" class="inline-form" onsubmit="return confirm('Remove {{ address.email|escapejs }}?')">
+      {% csrf_token %}<button class="secondary">Remove address</button>
+    </form>
+  </div>
+  {% empty %}
+  <p class="muted">You haven't added an email address.</p>
+  {% endfor %}
+
+  {% if can_add %}
+  <h3>Add an address</h3>
+  <p class="muted">We'll email it a one-time code to confirm it's yours. Nothing else is sent to it until you turn notifications on.</p>
+  <form method="post" action="{% url 'email_add' %}">
+    {% csrf_token %}
+    {{ add_form.as_p }}
+    <p><button>Send code</button></p>
+  </form>
+  {% else %}
+  <p class="muted">You can add up to {{ max_addresses }} addresses.</p>
+  {% endif %}
+</div>
+{% endblock %}

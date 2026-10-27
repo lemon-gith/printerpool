@@ -1,5 +1,6 @@
 from functools import wraps
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -117,7 +118,14 @@ def request_create(request):
     return render(
         request,
         "prints/request_form.html",
-        {"form": form, "source": source, "cap": services.cap_status(request.user)},
+        {
+            "form": form,
+            "source": source,
+            "cap": services.cap_status(request.user),
+            "max_files": settings.MAX_FILES_PER_REQUEST,
+            "max_upload_mb": settings.MAX_UPLOAD_MB,
+            "extensions": ",".join(f".{e}" for e in settings.ALLOWED_MODEL_EXTENSIONS),
+        },
     )
 
 
@@ -136,6 +144,7 @@ def request_detail(request, pk):
         "transitions": [(s, PrintRequest.Status(s).label) for s in services.allowed_request_transitions(request.user, req)],
         "owner_cap": services.cap_status(req.user),
         "can_queue_print": is_staff and req.status in (PrintRequest.Status.APPROVED, PrintRequest.Status.IN_PROGRESS),
+        "blocked_reason": services.request_blocked_reason(req) if req.status == PrintRequest.Status.IN_PROGRESS else None,
         "replaced_by": getattr(req, "replaced_by", None),
         "can_resubmit": (
             req.status == PrintRequest.Status.RECALLED
@@ -143,6 +152,8 @@ def request_detail(request, pk):
             and not hasattr(req, "replaced_by")
         ),
         "print_form": PrintCreateForm() if is_staff else None,
+        "mail_subject": f"PrintPool: {req.title}",
+        "mail_body": f"\n\n---\nRequest: {request.build_absolute_uri()}",
     }
     return render(request, "prints/request_detail.html", ctx)
 
@@ -160,7 +171,9 @@ def request_action(request, pk):
             messages.error(request, str(e))
         else:
             if to_status == PrintRequest.Status.RECALLED:
-                messages.success(request, "Request recalled. Update the details below and resubmit.")
+                messages.success(
+                    request, "Request recalled. Edit and resubmit it below, or leave this page to keep it withdrawn."
+                )
                 return redirect(f"{reverse('request_create')}?from={req.pk}")
             messages.success(request, "Request updated.")
     return redirect("request_detail", pk=req.pk)

@@ -1,4 +1,4 @@
-<!doctype html>
+{% load static %}<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -30,7 +30,7 @@
     .messages .error { background:#fbe3e1; } .messages .success { background:#dcf3e5; }
     form p { margin:.5rem 0; } label { font-weight:600; display:block; }
     form p div label { font-weight:400; } /* checkbox lists */
-    input[type=text], input[type=password], input[type=number], select, textarea { width:100%; max-width:30rem; padding:.4rem; border:1px solid var(--line); border-radius:4px; font:inherit; }
+    input[type=text], input[type=password], input[type=number], input[type=email], select, textarea { width:100%; max-width:30rem; padding:.4rem; border:1px solid var(--line); border-radius:4px; font:inherit; }
     button, .btn { background:var(--accent); color:#fff; border:0; padding:.45rem .9rem; border-radius:4px; font:inherit; cursor:pointer; text-decoration:none; display:inline-block; }
     button.secondary { background:#e8ecf2; color:var(--fg); }
     .inline-form { display:inline; }
@@ -42,6 +42,21 @@
     .filters { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin-bottom:.75rem; }
     .filters input[type=search] { flex:1 1 14rem; max-width:22rem; padding:.4rem; border:1px solid var(--line); border-radius:4px; font:inherit; }
     .filters select { width:auto; }
+    .notice { background:#eef3ff; border-left:3px solid var(--accent); padding:.6rem .8rem; border-radius:4px; }
+    .address { border-top:1px solid var(--line); padding:.5rem 0 .75rem; }
+    .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+    .file-picker { border:1px solid var(--line); border-radius:6px; padding:.5rem 1rem; margin:.75rem 0; }
+    .file-picker legend { font-weight:600; padding:0 .25rem; }
+    .chips { list-style:none; padding:0; margin:.25rem 0; display:flex; flex-wrap:wrap; gap:.4rem; }
+    .chip { display:inline-flex; align-items:center; gap:.35rem; background:#e8ecf2; border-radius:999px; padding:.2rem .35rem .2rem .7rem; font-size:.9rem; }
+    .chip label { font-weight:400; display:inline; cursor:pointer; }
+    .chip.removed .chip-name { text-decoration:line-through; color:var(--muted); }
+    .chip.invalid { background:#fbe3e1; }
+    .chip-x { background:transparent; color:var(--fg); border:0; padding:0 .4rem; border-radius:999px; line-height:1.4; font-size:1rem; cursor:pointer; }
+    .chip-x:hover, .chip-x:focus-visible { background:rgba(0,0,0,.1); }
+    .chip-x.undo { font-size:.8rem; color:var(--accent); }
+    .js .file-picker .chip input[type=checkbox] { position:absolute; opacity:0; pointer-events:none; }
+    footer.wrap { padding-top:0; padding-bottom:2rem; }
     .pager { display:flex; gap:1rem; align-items:center; justify-content:center; margin-top:.75rem; }
   </style>
 </head>
@@ -53,7 +68,7 @@
       <nav>
         <a href="{% url 'request_create' %}">New request</a>
         {% if user.is_admin %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
-        <a href="{% url 'password_change' %}">Password</a>
+        <a href="{% url 'account' %}">Account</a>
         <span class="muted">{{ user.username }} ({{ user.get_role_display }})</span>
         <form class="inline-form" method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="secondary">Log out</button></form>
       </nav>
@@ -61,10 +76,18 @@
     </div>
   </header>
   <main class="wrap">
-    {% if messages %}
+    {% if messages and not request.META.HTTP_X_LIVE_REFRESH %}{# polling must not consume flash messages #}
     <ul class="messages">{% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}</ul>
     {% endif %}
     {% block content %}{% endblock %}
   </main>
+  {% if user.is_authenticated %}{% if contact_staff_email or contact_admin_email and user.is_print_staff %}
+  <footer class="wrap muted">
+    Need help?
+    {% if contact_staff_email %}<a href="mailto:{{ contact_staff_email }}?subject={{ 'PrintPool: question'|urlencode }}">Contact staff</a>{% endif %}
+    {% if contact_admin_email and user.is_print_staff %}{% if contact_staff_email %}·{% endif %} <a href="mailto:{{ contact_admin_email }}?subject={{ 'PrintPool: admin request'|urlencode }}">Contact an admin</a>{% endif %}
+  </footer>
+  {% endif %}{% endif %}
+  <script src="{% static 'js/live.js' %}" defer></script>
 </body>
 </html>
