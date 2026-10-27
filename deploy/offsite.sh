@@ -1,13 +1,14 @@
 #!/bin/sh
 # Weekly off-site copy: sends the newest local dump (from backup.sh) to another machine.
 #
-# Two transports, use either or both (configure in deploy/backup.env):
+# Two transports, use either or both (configure in deploy/jobs.env):
 #   SSH   - OFFSITE_SSH_TARGET=user@host:/path   + OFFSITE_SSH_KEY=/path/to/private_key
 #   HTTPS - OFFSITE_HTTP_URL=https://host/upload  + OFFSITE_API_KEY=...   (file is PUT to $URL/<name>)
 set -eu
 
 cd "$(dirname "$0")/.."
-[ -f deploy/backup.env ] && . deploy/backup.env
+. deploy/monitor.sh
+monitor_job "${OFFSITE_PING_URL:-}"
 
 BACKUP_DIR=${BACKUP_DIR:-/var/backups/printpool}
 OFFSITE_SSH_TARGET=${OFFSITE_SSH_TARGET:-}
@@ -17,7 +18,7 @@ OFFSITE_HTTP_URL=${OFFSITE_HTTP_URL:-}
 OFFSITE_API_KEY=${OFFSITE_API_KEY:-}
 
 if [ -z "$OFFSITE_SSH_TARGET" ] && [ -z "$OFFSITE_HTTP_URL" ]; then
-    echo "offsite: set OFFSITE_SSH_TARGET and/or OFFSITE_HTTP_URL in deploy/backup.env" >&2
+    echo "offsite: set OFFSITE_SSH_TARGET and/or OFFSITE_HTTP_URL in deploy/jobs.env" >&2
     exit 1
 fi
 
