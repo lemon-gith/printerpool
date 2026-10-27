@@ -1,10 +1,18 @@
 # Fixed project name so container/volume names are the same on every host, whatever the folder is called.
 name: printpool
 
+# Docker keeps container logs forever by default; cap each service at 5 x 10 MB so logs can't fill the disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   app:
     build: .
     restart: unless-stopped
+    logging: *logging
     env_file: .env
     environment:
       POSTGRES_HOST: db
@@ -19,6 +27,7 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -32,11 +41,12 @@ services:
       retries: 10
 
   # Optional HTTPS reverse proxy for the public VPS: `docker compose --profile proxy up -d`.
-  # Leave it off in the lab if the university already fronts the server with its own proxy.
+  # Leave it off for local testing. When using it, set APP_PORT=127.0.0.1:8000 and DJANGO_TRUSTED_PROXY_COUNT=1.
   caddy:
     image: caddy:2-alpine
     profiles: ["proxy"]
     restart: unless-stopped
+    logging: *logging
     environment:
       SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
     ports:

@@ -18,24 +18,26 @@
     </table></div>
     {% else %}<p class="muted">Nothing queued or printing.</p>{% endif %}
   </div>
+{% else %}
+  <div class="card">{% include "prints/_cap.html" %}</div>
+{% endif %}
 
   <div class="card">
-    <h2>All requests</h2>
-    <form method="get">
-      <select name="status" onchange="this.form.submit()" style="max-width:14rem">
+    <h2>{% if user.is_print_staff %}All requests{% else %}My requests{% endif %}</h2>
+    <form method="get" class="filters">
+      <input type="search" name="q" value="{{ search }}" placeholder="{% if user.is_print_staff %}Search title or user…{% else %}Search title…{% endif %}" aria-label="Search">
+      <select name="status" aria-label="Status">
         <option value="">All statuses</option>
         {% for value, label in statuses %}<option value="{{ value }}" {% if value == status_filter %}selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
+      <button>Filter</button>
+      {% if search or status_filter %}<a href="{% url 'dashboard' %}">Clear</a>{% endif %}
     </form>
-{% else %}
-  <div class="card">{% include "prints/_cap.html" %}</div>
-  <div class="card">
-    <h2>My requests</h2>
-{% endif %}
-    {% if requests %}
+
+    {% if page.object_list %}
     <div class="table-scroll"><table>
       <tr><th>Title</th>{% if user.is_print_staff %}<th>User</th>{% endif %}<th>Status</th><th>Submitted</th></tr>
-      {% for r in requests %}
+      {% for r in page.object_list %}
       <tr>
         <td><a href="{% url 'request_detail' r.pk %}">{{ r.title }}</a></td>
         {% if user.is_print_staff %}<td>{{ r.user.username }}</td>{% endif %}
@@ -44,6 +46,16 @@
       </tr>
       {% endfor %}
     </table></div>
+
+    {% if page.paginator.num_pages > 1 %}
+    <nav class="pager">
+      {% if page.has_previous %}<a href="?{{ filter_query }}{% if filter_query %}&amp;{% endif %}page={{ page.previous_page_number }}">← Newer</a>{% endif %}
+      <span class="muted">Page {{ page.number }} of {{ page.paginator.num_pages }} · {{ page.paginator.count }} requests</span>
+      {% if page.has_next %}<a href="?{{ filter_query }}{% if filter_query %}&amp;{% endif %}page={{ page.next_page_number }}">Older →</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% elif search or status_filter %}
+    <p class="muted">No requests match these filters.</p>
     {% else %}
     <p class="muted">No requests yet. <a href="{% url 'request_create' %}">Submit one</a>.</p>
     {% endif %}

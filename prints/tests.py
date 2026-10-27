@@ -173,3 +173,158 @@ class AccountTests(TestCase):
         u.refresh_from_db()
         self.assertFalse(u.must_change_password)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+
+@override_settings(
+    STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage", "OPTIONS": {"location": MEDIA}},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
+)
+class RecallTests(TestCase):
+    def setUp(self):
+        self.student = User.objects.create_user("student", password="x")
+        self.other = User.objects.create_user("other", password="x")
+        self.staff = User.objects.create_user("tech", password="x", role=User.Role.STAFF)
+        self.req = services.submit_request(self.student, files=[stl("orig.stl")], title="Old", material="pla")
+
+    def recall(self, user=None):
+        self.client.force_login(user or self.student)
+        return self.client.post(reverse("request_action", args=[self.req.pk]), {"to_status": RS.RECALLED})
+
+    def test_only_owner_can_recall(self):
+        self.assertNotIn(RS.RECALLED, services.allowed_request_transitions(self.staff, self.req))
+        self.assertNotIn(RS.RECALLED, services.allowed_request_transitions(self.other, self.req))
+        self.assertIn(RS.RECALLED, services.allowed_request_transitions(self.student, self.req))
+
+    def test_cannot_recall_once_printing(self):
+        services.transition_request(self.req, RS.APPROVED, self.staff)
+        job = services.create_print(self.req, self.staff, printer=None, est_duration_minutes=5, est_filament_g=5)
+        services.transition_print(job, PS.PRINTING, self.staff)
+        self.req.refresh_from_db()
+        self.assertNotIn(RS.RECALLED, services.allowed_request_transitions(self.student, self.req))
+
+    def test_recall_cancels_queued_prints_and_sets_expiry(self):
+        services.transition_request(self.req, RS.APPROVED, self.staff)
+        job = services.create_print(self.req, self.staff, printer=None, est_duration_minutes=5, est_filament_g=5)
+        resp = self.recall()
+        self.assertRedirects(resp, f"{reverse('request_create')}?from={self.req.pk}")
+        job.refresh_from_db()
+        self.req.refresh_from_db()
+        self.assertEqual((self.req.status, job.status), (RS.RECALLED, PS.CANCELLED))
+        self.assertAlmostEqual(self.req.files_expire_at, timezone.now() + timedelta(days=7), delta=timedelta(seconds=5))
+
+    def test_edit_form_prefilled_and_resubmit_copies_kept_files(self):
+        self.recall()
+        page = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
+        self.assertContains(page, 'value="Old"')
+        old_file = self.req.files.get()
+        resp = self.client.post(
+            f"{reverse('request_create')}?from={self.req.pk}",
+            {"title": "New", "material": "petg", "keep_files": [old_file.pk], "files": [stl("extra.stl")]},
+        )
+        new = PrintRequest.objects.get(title="New")
+        self.assertRedirects(resp, reverse("request_detail", args=[new.pk]))
+        self.assertEqual(new.supersedes, self.req)
+        self.assertEqual((new.status, new.material), (RS.SUBMITTED, "petg"))
+        names = sorted(new.files.values_list("original_name", flat=True))
+        self.assertEqual(names, ["extra.stl", "orig.stl"])
+        copy = new.files.get(original_name="orig.stl")
+        self.assertNotEqual(copy.file.name, old_file.file.name)  # its own copy, expiring on its own schedule
+        self.assertEqual(copy.sha256, old_file.sha256)
+
+    def test_cannot_resubmit_twice(self):
+        self.recall()
+        url = f"{reverse('request_create')}?from={self.req.pk}"
+        self.client.post(url, {"title": "A", "material": "pla", "keep_files": [self.req.files.get().pk]})
+        resp = self.client.get(url)
+        self.assertRedirects(resp, reverse("request_create"))
+        self.assertEqual(PrintRequest.objects.filter(supersedes=self.req).count(), 1)
+
+    def test_needs_at_least_one_file(self):
+        self.recall()
+        resp = self.client.post(f"{reverse('request_create')}?from={self.req.pk}", {"title": "A", "material": "pla"})
+        self.assertContains(resp, "at least one file")
+
+    def test_replaced_request_hidden_from_default_list(self):
+        self.recall()
+        self.client.post(f"{reverse('request_create')}?from={self.req.pk}", {"title": "New", "material": "pla", "keep_files": [self.req.files.get().pk]})
+        titles = [r.title for r in self.client.get("/").context["page"].object_list]
+        self.assertEqual(titles, ["New"])
+        recalled = [r.title for r in self.client.get("/", {"status": "recalled"}).context["page"].object_list]
+        self.assertEqual(recalled, ["Old"])
+
+    def test_other_user_cannot_resubmit_or_steal_files(self):
+        self.recall()
+        self.client.force_login(self.other)
+        resp = self.client.get(f"{reverse('request_create')}?from={self.req.pk}")
+        self.assertRedirects(resp, reverse("request_create"))
+        # A plain new request can't pick files from someone else's request either.
+        self.client.post(reverse("request_create"), {"title": "X", "material": "pla", "keep_files": [self.req.files.get().pk]})
+        self.assertFalse(PrintRequest.objects.filter(title="X").exists())
+
+
+class DashboardTests(TestCase):
+    def setUp(self):
+        self.staff = User.objects.create_user("tech", password="x", role=User.Role.STAFF)
+        self.alice = User.objects.create_user("alice", password="x")
+        self.bob = User.objects.create_user("bob", password="x")
+        for i in range(30):
+            PrintRequest.objects.create(user=self.alice, title=f"Alice part {i}")
+        PrintRequest.objects.create(user=self.bob, title="Bob's gear")
+
+    def test_paginates_and_keeps_filters(self):
+        self.client.force_login(self.staff)
+        resp = self.client.get("/", {"q": "alice"})
+        self.assertEqual(resp.context["page"].paginator.count, 30)
+        self.assertEqual(len(resp.context["page"].object_list), 25)
+        self.assertContains(resp, "q=alice&amp;page=2")
+        self.assertEqual(len(self.client.get("/", {"q": "alice", "page": 2}).context["page"].object_list), 5)
+
+    def test_staff_search_by_username_and_title(self):
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get("/", {"q": "bob"}).context["page"].paginator.count, 1)
+        self.assertEqual(self.client.get("/", {"q": "gear"}).context["page"].paginator.count, 1)
+
+    def test_users_only_see_their_own(self):
+        self.client.force_login(self.bob)
+        resp = self.client.get("/", {"q": "part"})
+        self.assertEqual(resp.context["page"].paginator.count, 0)
+
+
+@override_settings(
+    STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage", "OPTIONS": {"location": MEDIA}},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
+)
+class AdminTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser("root", password="x")
+        self.student = User.objects.create_user("student", password="x")
+        self.client.force_login(self.admin)
+
+    def test_status_is_read_only_in_admin(self):
+        req = PrintRequest.objects.create(user=self.student, title="T")
+        page = self.client.get(reverse("admin:prints_printrequest_change", args=[req.pk]))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, 'name="status"')
+        self.assertContains(page, 'name="files_expire_at_0"')  # expiry is still adjustable
+
+    def test_users_cannot_be_deleted_only_deactivated(self):
+        page = self.client.get(reverse("admin:accounts_user_delete", args=[self.student.pk]))
+        self.assertEqual(page.status_code, 403)
+        self.client.post(
+            reverse("admin:accounts_user_changelist"),
+            {"action": "deactivate", "_selected_action": [self.student.pk, self.admin.pk]},
+        )
+        self.student.refresh_from_db()
+        self.admin.refresh_from_db()
+        self.assertFalse(self.student.is_active)
+        self.assertTrue(self.admin.is_active)  # can't lock yourself out
+
+    def test_deactivated_user_is_logged_out(self):
+        other = self.client_class()
+        other.force_login(self.student)
+        User.objects.filter(pk=self.student.pk).update(is_active=False)
+        self.assertRedirects(other.get("/"), f"{reverse('login')}?next=/")

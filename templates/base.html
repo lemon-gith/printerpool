@@ -23,11 +23,13 @@
     .s-approved,.s-succeeded,.s-completed { background:#dcf3e5; color:var(--ok); }
     .s-printing,.s-in_progress { background:#dde8ff; color:var(--accent); }
     .s-rejected,.s-failed,.s-cancelled { background:#fbe3e1; color:var(--bad); }
+    .s-recalled { background:#ece8f6; color:#5b4a8a; }
     .s-queued,.s-submitted { background:#fff1d6; color:var(--warn); }
     .messages { list-style:none; padding:0; }
     .messages li { padding:.6rem 1rem; border-radius:6px; margin-bottom:.5rem; background:#e8f0ff; }
     .messages .error { background:#fbe3e1; } .messages .success { background:#dcf3e5; }
     form p { margin:.5rem 0; } label { font-weight:600; display:block; }
+    form p div label { font-weight:400; } /* checkbox lists */
     input[type=text], input[type=password], input[type=number], select, textarea { width:100%; max-width:30rem; padding:.4rem; border:1px solid var(--line); border-radius:4px; font:inherit; }
     button, .btn { background:var(--accent); color:#fff; border:0; padding:.45rem .9rem; border-radius:4px; font:inherit; cursor:pointer; text-decoration:none; display:inline-block; }
     button.secondary { background:#e8ecf2; color:var(--fg); }
@@ -37,6 +39,10 @@
     .meter > span { display:block; height:100%; background:var(--accent); }
     .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1rem; }
     .table-scroll { overflow-x:auto; }
+    .filters { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin-bottom:.75rem; }
+    .filters input[type=search] { flex:1 1 14rem; max-width:22rem; padding:.4rem; border:1px solid var(--line); border-radius:4px; font:inherit; }
+    .filters select { width:auto; }
+    .pager { display:flex; gap:1rem; align-items:center; justify-content:center; margin-top:.75rem; }
   </style>
 </head>
 <body>

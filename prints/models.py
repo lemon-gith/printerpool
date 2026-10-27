@@ -21,6 +21,8 @@ class PrintRequest(models.Model):
         IN_PROGRESS = "in_progress", "In progress"
         COMPLETED = "completed", "Completed"
         CANCELLED = "cancelled", "Cancelled"
+        # Withdrawn by its owner to be edited and resubmitted as a new request (see `supersedes`).
+        RECALLED = "recalled", "Recalled"
 
     class Material(models.TextChoices):
         PLA = "pla", "PLA"
@@ -44,6 +46,11 @@ class PrintRequest(models.Model):
 
     files_expire_at = models.DateTimeField(db_index=True)
     files_purged_at = models.DateTimeField(null=True, blank=True)
+
+    # Requests are immutable; editing one means recalling it and submitting a replacement.
+    supersedes = models.OneToOneField(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="replaced_by"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

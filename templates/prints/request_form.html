@@ -1,14 +1,22 @@
 {% extends "base.html" %}
-{% block title %}New request · PrintPool{% endblock %}
+{% block title %}{% if source %}Edit request{% else %}New request{% endif %} · PrintPool{% endblock %}
 {% block content %}
 <div class="card">
+  {% if source %}
+  <h1>Edit and resubmit</h1>
+  <p class="muted">You're editing <a href="{% url 'request_detail' source.pk %}">{{ source.title }}</a>, which has been recalled. Submitting creates a new request that replaces it and goes back into the queue for approval.</p>
+  {% else %}
   <h1>New print request</h1>
+  {% endif %}
   {% include "prints/_cap.html" %}
+  {% if source and not source.files_available %}
+  <p class="muted">The original files have expired, so please upload them again.</p>
+  {% endif %}
   <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
     {{ form.as_p }}
-    <p><button>Submit request</button></p>
+    <p><button>{% if source %}Resubmit request{% else %}Submit request{% endif %}</button></p>
   </form>
-  <p class="muted">Uploaded files are deleted 30 days after submission if nothing happens, or 7 days after printing starts or the request is rejected.</p>
+  <p class="muted">Uploaded files are deleted 30 days after submission if nothing happens, or 7 days after printing starts or the request is rejected or recalled.</p>
 </div>
 {% endblock %}

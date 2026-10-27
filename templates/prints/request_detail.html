@@ -9,14 +9,19 @@
   </p>
   {% if req.notes %}<p>{{ req.notes|linebreaksbr }}</p>{% endif %}
   {% if req.review_note %}<p><strong>Staff note:</strong> {{ req.review_note }}</p>{% endif %}
+  {% if req.supersedes_id %}<p class="muted">Replaces recalled request <a href="{% url 'request_detail' req.supersedes_id %}">{{ req.supersedes.title }}</a>.</p>{% endif %}
+  {% if replaced_by %}<p>This request was recalled and replaced by <a href="{% url 'request_detail' replaced_by.pk %}">{{ replaced_by.title }}</a>.</p>{% endif %}
+  {% if can_resubmit %}<p>You recalled this request. <a class="btn" href="{% url 'request_create' %}?from={{ req.pk }}">Edit and resubmit</a></p>{% endif %}
 
   {% if transitions %}
   <form method="post" action="{% url 'request_action' req.pk %}">
     {% csrf_token %}
     {% if user.is_print_staff %}<p><label for="note">Note (optional, shown to the user)</label><textarea id="note" name="note" rows="2"></textarea></p>{% endif %}
     {% for value, label in transitions %}
-      <button name="to_status" value="{{ value }}" {% if value == "rejected" or value == "cancelled" %}class="secondary"{% endif %}>
-        {% if value == "approved" %}Approve{% elif value == "rejected" %}Reject{% elif value == "cancelled" %}Cancel request{% elif value == "completed" %}Mark completed{% else %}{{ label }}{% endif %}
+      <button name="to_status" value="{{ value }}"
+        {% if value == "rejected" or value == "cancelled" or value == "recalled" %}class="secondary"{% endif %}
+        {% if value == "recalled" %}onclick="return confirm('Recall this request? It will be withdrawn and you can edit and resubmit it as a new request.')"{% elif value == "cancelled" %}onclick="return confirm('Cancel this request?')"{% endif %}>
+        {% if value == "approved" %}Approve{% elif value == "rejected" %}Reject{% elif value == "cancelled" %}Cancel request{% elif value == "completed" %}Mark completed{% elif value == "recalled" %}Recall &amp; edit{% else %}{{ label }}{% endif %}
       </button>
     {% endfor %}
   </form>
