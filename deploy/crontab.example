@@ -1,0 +1,11 @@
+# Install with: sudo crontab -e   (then paste, changing /opt/printerpool to where the repo lives)
+# Times are server time. Minutes are deliberately off the hour.
+
+# Delete expired model files (hourly)
+17 * * * *  cd /opt/printerpool && docker compose exec -T app python manage.py purge_expired_files >> /var/log/printpool-purge.log 2>&1
+
+# Nightly database dump kept on this server (03:23)
+23 3 * * *  /opt/printerpool/deploy/backup.sh >> /var/log/printpool-backup.log 2>&1
+
+# Weekly off-site copy of the newest dump (Sundays 04:41)
+41 4 * * 0  /opt/printerpool/deploy/offsite.sh >> /var/log/printpool-backup.log 2>&1

@@ -4,3 +4,4 @@ __pycache__/
 staticfiles/
 media/
 .venv/
+deploy/backup.env
