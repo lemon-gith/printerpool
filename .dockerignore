@@ -5,3 +5,4 @@ staticfiles
 media
 .venv
 deploy/jobs.env
+deploy/cloudflared

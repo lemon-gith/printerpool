@@ -74,6 +74,22 @@ services:
     depends_on:
       - app
 
+  # Optional: run cloudflared next to PrintPool instead of on the host. Turned on by adding "cloudflared" to
+  # COMPOSE_PROFILES in .env (deploy/personal-setup.sh does this when deploy/cloudflared/config.yml exists).
+  # Put your locally managed tunnel's config.yml and credentials .json in deploy/cloudflared/ (git-ignored);
+  # see deploy/cloudflared/README.md. Inside this network, the app is reachable as http://app:8000.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.4
+    profiles: ["cloudflared"]
+    restart: unless-stopped
+    logging: *logging
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      - ./deploy/cloudflared:/etc/cloudflared:ro
+    depends_on:
+      app:
+        condition: service_healthy
+
 volumes:
   pgdata:
   media:

@@ -5,3 +5,7 @@ staticfiles/
 media/
 .venv/
 deploy/jobs.env
+# Tunnel credentials and config for the optional cloudflared container (deploy/cloudflared/README.md)
+deploy/cloudflared/*
+!deploy/cloudflared/README.md
+!deploy/cloudflared/config.example.yml
