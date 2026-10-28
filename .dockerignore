@@ -4,4 +4,4 @@
 staticfiles
 media
 .venv
-deploy/backup.env
+deploy/jobs.env

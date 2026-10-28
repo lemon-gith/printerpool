@@ -109,6 +109,9 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
+# Flash messages live in the server-side session rather than a cookie.
+MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
+
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"
 LOGOUT_REDIRECT_URL = "login"
@@ -123,6 +126,17 @@ SESSION_COOKIE_SECURE = SECURE
 CSRF_COOKIE_SECURE = SECURE
 if SECURE:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    # Caddy already redirects to HTTPS; this is a second line of defence. The health check is exempt
+    # because Docker calls it over plain HTTP from inside the container.
+    SECURE_SSL_REDIRECT = True
+    SECURE_REDIRECT_EXEMPT = [r"^health/$"]
+    # HSTS makes browsers refuse plain HTTP for this host. Start short (1 hour); once HTTPS has been
+    # working for a while, raise DJANGO_HSTS_SECONDS to a year (31536000). Long values are hard to undo.
+    SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "3600"))
+
+# Deliberately off: HSTS includeSubDomains/preload would force HTTPS on every sibling site under the domain
+# (e.g. other uni services), which isn't ours to decide.
+SILENCED_SYSTEM_CHECKS = ["security.W005", "security.W021"]
 
 # Login throttling (django-axes)
 AXES_FAILURE_LIMIT = 5
@@ -151,9 +165,7 @@ STORAGES = {
     },
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
-if sys.argv[1:2] == ["test"]:
-    # Tests render pages without running collectstatic first, so there is no manifest to look names up in.
-    STORAGES["staticfiles"] = {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}
+
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
 ALLOWED_MODEL_EXTENSIONS = ["stl", "3mf"]
@@ -187,9 +199,27 @@ CONTACT_ADMIN_EMAILS = env_emails("CONTACT_ADMIN_EMAILS")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Optional error tracking: set SENTRY_DSN to send unhandled exceptions to Sentry (or a compatible service).
+if os.environ.get("SENTRY_DSN"):
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=os.environ["SENTRY_DSN"],
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+        send_default_pii=False,  # no usernames, IPs or request bodies; uploads and passwords stay out of it
+        traces_sample_rate=0,
+    )
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "root": {"handlers": ["console"], "level": "INFO"},
 }
+
+# Test-only adjustments; kept last so they override everything above.
+if sys.argv[1:2] == ["test"]:
+    # Tests render pages without running collectstatic first, so there is no manifest to look names up in.
+    STORAGES["staticfiles"] = {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}
+    # The test client speaks plain HTTP; don't redirect it even when run with a production .env.
+    SECURE_SSL_REDIRECT = False

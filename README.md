@@ -16,6 +16,10 @@ The `role` field is the single source of truth. Django's `is_staff`/`is_superuse
 
 ## Running it
 
+**Deploying to a server?** Follow [docs/DEPLOY.md](docs/DEPLOY.md). `deploy/setup-server.sh` does most of the work.
+
+Locally:
+
 ```sh
 cp .env.example .env
 # edit .env: set DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DJANGO_ALLOWED_HOSTS, DJANGO_CSRF_TRUSTED_ORIGINS
@@ -27,7 +31,11 @@ The app is on `http://<host>:8000`. Migrations run automatically on every start.
 
 ### Creating accounts
 
-In `/admin/` → Users → *Add user*: enter a username and role only. A random password is generated and shown **once** in the confirmation banner. Give it to the person; they're forced to choose their own on first login. To reset a forgotten password, select the user(s) and use the *Reset password* action.
+- **Many at once:** `/admin/` → Users → **Import users (CSV)**, with columns `username` (required), `first_name`, `last_name`, `role` (`user`/`student`, `staff` or `admin`; blank means user). The whole file is checked first, and nothing is created if any row has a problem (bad or duplicate username, unknown role, existing account). Up to 1000 rows; Excel's "CSV UTF-8" works.
+- **One at a time:** `/admin/` → Users → *Add user*: enter a username and role only.
+- **Forgotten password:** select the user(s) and use the *Reset password* action.
+
+In every case a random temporary password is generated and shown **once**, on a printable sheet of cut-out slips (with a CSV download). The page isn't cached and the passwords aren't stored. People are forced to choose their own password at first login.
 
 Accounts are **deactivated, never deleted**, so request history and usage figures stay intact. Use the *Deactivate selected users* action (or untick *Active*). A deactivated user is logged out immediately and can't log in. *Reactivate selected users* undoes it.
 
@@ -116,7 +124,7 @@ The monthly cap is in grams of filament: `PRINT_CAP_GRAMS_PER_MONTH` in `.env`, 
 
 ## HTTPS on a public VPS
 
-Point a DNS name at the VPS, then in `.env`:
+`deploy/setup-server.sh` sets all of this up for you. To do it by hand, point a DNS name at the VPS, then in `.env`:
 
 ```
 SITE_DOMAIN=print.example.ac.uk
@@ -127,11 +135,11 @@ APP_PORT=127.0.0.1:8000          # only reachable through Caddy
 DJANGO_TRUSTED_PROXY_COUNT=1     # trust Caddy's X-Forwarded-For for real visitor IPs
 ```
 
-Then run `docker compose --profile proxy up -d`. Caddy fetches and renews a Let's Encrypt certificate automatically.
+Then run `docker compose --profile proxy up -d`. Caddy fetches and renews a Let's Encrypt certificate automatically. With `DJANGO_SECURE=1`, Django also redirects plain HTTP and sends HSTS for `DJANGO_HSTS_SECONDS` (1 hour by default; raise it to a year once HTTPS is proven, see [docs/DEPLOY.md](docs/DEPLOY.md#8-after-a-week-or-so)).
 
 **Keep `APP_PORT` and `DJANGO_TRUSTED_PROXY_COUNT` together.** Login throttling locks out a username + IP pair after 5 failures. Behind Caddy, the app would otherwise see every visitor as Caddy's address, so anyone could lock any user out. `DJANGO_TRUSTED_PROXY_COUNT=1` makes it use the address Caddy recorded instead. That's only safe while the app port is unreachable from outside (`127.0.0.1:`), because a client talking to the app directly could fake that header. For local testing without Caddy, leave both at their defaults.
 
-On Hetzner, also add a Cloud Firewall allowing only TCP 22, 80 and 443 inbound.
+On Hetzner, also add a Cloud Firewall allowing only TCP 22, 80 and 443 (and UDP 443) inbound.
 
 ## Backups
 
@@ -142,22 +150,7 @@ Only the database is backed up automatically. Uploaded files expire within a mon
 
 Setup:
 
-```sh
-cp deploy/backup.env.example deploy/backup.env   # git-ignored; fill in the OFFSITE_* settings
-chmod 600 deploy/backup.env
-
-# SSH transport: create a key used only for backups, and install the public half on your server
-sudo ssh-keygen -t ed25519 -N "" -C printpool-backup -f /root/.ssh/printpool_backup
-sudo cat /root/.ssh/printpool_backup.pub
-```
-
-On the receiving server, put that public key in the backup user's `~/.ssh/authorized_keys`, prefixed with `restrict,` so the key can copy files but can't open a shell or forward ports:
-
-```
-restrict ssh-ed25519 AAAA... printpool-backup
-```
-
-Run both scripts once by hand (`sudo deploy/backup.sh && sudo deploy/offsite.sh`) to check they work, then add them to cron.
+`deploy/setup-server.sh` creates `deploy/jobs.env` (git-ignored) and a dedicated SSH key, `/root/.ssh/printpool_backup`. Fill in the `OFFSITE_*` settings in `deploy/jobs.env` and install the public key on the receiving server, prefixed with `restrict ` so it can copy files but can't open a shell or forward ports. [docs/DEPLOY.md](docs/DEPLOY.md#6-off-site-backups) has the steps. Run both scripts once by hand (`sudo deploy/backup.sh && sudo deploy/offsite.sh`) to check they work.
 
 **Restoring** (works for any dump, local or off-site):
 
@@ -169,19 +162,29 @@ docker compose start app
 
 ## Scheduled jobs
 
-`deploy/crontab.example` holds all three jobs: hourly file purge, nightly dump, weekly off-site copy. Install it with `sudo crontab -e`, adjusting the path to the repo.
+`deploy/crontab.example` holds all three jobs: hourly file purge (`deploy/purge.sh`), nightly dump (`deploy/backup.sh`) and weekly off-site copy (`deploy/offsite.sh`). The setup and update scripts install it as `/etc/cron.d/printpool`, with the repo's real path. Their logs go to `/var/log/printpool-*.log`, rotated weekly.
+
+## Monitoring
+
+- **`/health/`** returns `{"status": "ok", ...}` with HTTP 200 when the app can reach the database and write uploads, and 503 otherwise. Docker uses it as the app container's healthcheck (see `docker compose ps`); point an uptime monitor at `https://<domain>/health/`.
+- **Scheduled jobs** report to optional ping URLs in `deploy/jobs.env` (`PURGE_PING_URL`, `BACKUP_PING_URL`, `OFFSITE_PING_URL`), using the Healthchecks.io convention: `/start`, then success or `/fail`. The service alerts you if a job fails or doesn't run on time.
+- **Errors:** set `SENTRY_DSN` in `.env` to report unhandled exceptions to Sentry. No personal data is sent.
+
+## Continuous integration
+
+`.github/workflows/tests.yml` runs on every pull request and every push to `main`. It checks for missing migrations, runs Django's system checks and its production checklist (`check --deploy`), runs the tests against Postgres 16, and builds the production Docker image.
 
 ## Moving to another server
 
 1. On the old host: `docker compose stop app`, run `deploy/backup.sh`, and copy the newest dump across. To keep files that haven't expired yet, also run: `docker run --rm -v printpool_media:/data -v "$PWD":/backup alpine tar czf /backup/media.tgz -C /data .`
-2. On the new host: clone the repo, copy `.env` and `deploy/backup.env` (update the hostnames), then `docker compose up -d db`.
+2. On the new host: clone the repo, copy `.env` and `deploy/jobs.env` (update the hostnames), then `docker compose up -d db`.
 3. Restore the database as above. Restore files (if copied): `docker compose run --rm -v "$PWD":/backup --entrypoint sh app -c "tar xzf /backup/media.tgz -C /data/media"`
-4. `docker compose up -d`, then install the crontab.
+4. `docker compose up -d`, then run `deploy/setup-server.sh <domain>` (it keeps your copied settings) or install the crontab by hand.
 
 ## Development
 
 ```sh
-docker compose run --rm app python manage.py test          # run tests
+docker compose run --rm app python manage.py test          # run tests (CI runs these on every PR too)
 docker compose run --rm -u root -v "$PWD:/app" app python manage.py makemigrations   # after model changes
 ```
 
@@ -195,7 +198,8 @@ prints/     requests, files, prints, printers, audit log
   validators.py STL/3MF checks (extension, size, file signature)
 templates/  server-rendered HTML
 static/js/live.js  polling live updates
-deploy/     Caddyfile (HTTPS proxy), backup scripts, example crontab
+deploy/     server setup/update scripts, Caddyfile (HTTPS proxy), job scripts (purge, backup, offsite), crontab
+docs/       DEPLOY.md: step-by-step deployment guide
 ```
 
 Container logs are capped at 5 × 10 MB per service (`x-logging` in `compose.yaml`), so they can't fill the disk.
