@@ -135,6 +135,14 @@ class WorkflowTests(TestCase):
         self.assertContains(resp, "not a valid STL")
         self.assertFalse(PrintRequest.objects.exists())
 
+    def test_total_upload_size_limit(self):
+        self.client.force_login(self.student)
+        big = [stl(f"{i}.stl", 20_000 + i) for i in range(3)]  # ~1 MB each, distinct contents
+        with self.settings(MAX_REQUEST_UPLOAD_MB=2):
+            resp = self.client.post(reverse("request_create"), {"title": "x", "material": "pla", "files": big})
+        self.assertContains(resp, "the limit is 2 MB per submission")
+        self.assertFalse(PrintRequest.objects.exists())
+
     def test_upload_accepts_multiple_files(self):
         self.client.force_login(self.student)
         ascii_stl = SimpleUploadedFile("b.stl", b"solid b\nendsolid b\n")

@@ -31,7 +31,10 @@ class PrintRequestForm(forms.ModelForm):
     # Original files of a recalled request that the user is keeping (only present when editing one).
     keep_files = forms.ModelMultipleChoiceField(queryset=RequestFile.objects.none(), required=False)
 
-    files_help = f"STL or 3MF, up to {settings.MAX_UPLOAD_MB} MB each, max {settings.MAX_FILES_PER_REQUEST} files."
+    files_help = (
+        f"STL or 3MF, up to {settings.MAX_UPLOAD_MB} MB each and {settings.MAX_REQUEST_UPLOAD_MB} MB of new files "
+        f"in total, max {settings.MAX_FILES_PER_REQUEST} files."
+    )
 
     class Meta:
         model = PrintRequest
@@ -70,6 +73,12 @@ class PrintRequestForm(forms.ModelForm):
 
     def clean_files(self):
         files = self.cleaned_data["files"]
+        total_mb = sum(f.size for f in files) / (1024 * 1024)
+        if total_mb > settings.MAX_REQUEST_UPLOAD_MB:
+            raise forms.ValidationError(
+                f"The new files add up to {total_mb:.0f} MB; the limit is {settings.MAX_REQUEST_UPLOAD_MB} MB per "
+                "submission. Submit fewer or smaller files (you can add a separate request for the rest)."
+            )
         errors = []
         for f in files:
             try:
