@@ -1,232 +1,158 @@
 # Deploying PrintPool
 
-A start-to-finish checklist for running PrintPool on a small Hetzner Cloud server. Most of the server work is
-done by `deploy/setup-server.sh`; this guide covers that plus the steps that happen elsewhere (Hetzner's
-console, DNS, Resend, your backup server, monitoring).
+PrintPool runs entirely in Docker and changes nothing on the machine outside its own folder: no packages, firewall
+rules, services or scheduled tasks. That makes it safe to run on a shared PC. Visitors reach it through a
+**Cloudflare Tunnel**, so the machine needs no open ports and no public IP address.
 
-Budget about an hour the first time. Steps marked *(optional)* can be done later.
-
-There are two ways to put the site on the internet:
-
-- **Caddy (default):** the server is public, and Caddy gets a free Let's Encrypt certificate. Follow steps 1–3.
-- **Cloudflare Tunnel:** the server has **no open inbound ports**, and Cloudflare handles HTTPS. It can be set up
-  entirely from Hetzner's console with no SSH. Follow [Alternative: Cloudflare Tunnel](#alternative-cloudflare-tunnel-no-open-ports)
-  instead of steps 1–3.
-
-Steps 4 onwards are the same for both.
+Budget about half an hour the first time.
 
 ## 0. What you need
 
-- A **domain or subdomain** for the site, e.g. `print.example.ac.uk`. A uni subdomain usually needs a request
-  to IT; a cheap domain of your own works just as well.
-- An **SSH key** on your computer (`ssh-keygen -t ed25519` if you don't have one).
+- **Docker:** Docker Desktop on Windows or macOS, Docker Engine with the compose plugin on Linux. That's the only
+  thing to install.
+- **A domain on Cloudflare** (for the hostname, e.g. `print.yourdomain.com`, and the tunnel).
+- **This repository:** `git clone https://github.com/lemon-gith/printerpool` (or download it).
 
-## 1. Create the server (Hetzner console)
+## 1. Create the tunnel (Cloudflare)
 
-1. In the Hetzner Cloud console, create a project, then **Add Server**:
-   - **Location:** an EU one (Falkenstein, Nuremberg or Helsinki), since you're storing student data.
-   - **Image:** Ubuntu 24.04.
-   - **Type:** the smallest shared-vCPU x86 type (CX22/CX23, 2 vCPU, 4 GB RAM) is plenty.
-   - **SSH key:** add your public key. Don't use a root password.
-   - *(optional)* **Backups:** tick it for nightly whole-server snapshots (+20% of the server price). This is
-     a separate safety net on top of PrintPool's own database backups.
-2. **Firewalls → Create Firewall**, with inbound rules:
-   - TCP 22 (SSH). Restrict it to your own IP address if that's practical.
-   - TCP 80 and TCP 443 (web), and UDP 443 (HTTP/3), from anywhere.
+Pick one:
 
-   Apply it to the server. The setup script also turns on the server's own firewall (ufw); the Hetzner one is
-   an outer layer that Docker can't bypass.
+- **Managed in the dashboard (simplest).** Zero Trust → Networks → Tunnels → *Create a tunnel* (type
+  *Cloudflared*). Copy the **token** (the long string in the install command shown; you don't run that command).
+  Add a **public hostname**, e.g. `print.yourdomain.com`, with service type **HTTP** and URL **`gateway:8080`**.
+- **Managed locally with a `config.yml`.** Set up the tunnel the way you normally would, with its ingress for your
+  hostname pointing at `http://gateway:8080`. Then put `config.yml` and the tunnel's credentials `.json` in
+  `deploy/cloudflared/`, following [deploy/cloudflared/README.md](../deploy/cloudflared/README.md).
 
-## 2. Point the domain at the server
+`gateway:8080` is PrintPool's gateway as seen from the cloudflared container on PrintPool's Docker network.
 
-At your DNS provider, add an `A` record for your (sub)domain with the server's IPv4 address, and an `AAAA`
-record with its IPv6 address. Check it from your computer before continuing:
+## 2. Configure
 
 ```sh
-dig +short print.example.ac.uk    # should print the server's IP
+cp printpool.example.toml printpool.toml          # Windows: Copy-Item printpool.example.toml printpool.toml
 ```
 
-Caddy needs this to get an HTTPS certificate.
+Edit `printpool.toml`. Every setting is explained in the file. At minimum:
 
-## 3. Run the setup script
+```toml
+[site]
+domain = "print.yourdomain.com"     # the tunnel's public hostname
+time_zone = "Europe/London"
 
-```sh
-ssh root@<server-ip>
-git clone https://github.com/lemon-gith/printerpool /opt/printerpool
-/opt/printerpool/deploy/setup-server.sh print.example.ac.uk
+[cloudflared]
+enabled = true
+mode = "token"                      # or "config" for a locally managed tunnel
 ```
 
-It installs Docker, automatic security updates and the firewall, and switches SSH to keys only (only if it
-finds a key, so you can't be locked out). It then writes `.env` with a fresh secret key and database password,
-set up for HTTPS behind Caddy, creates `deploy/jobs.env` and an SSH key for off-site backups, installs the
-scheduled jobs (`/etc/cron.d/printpool`) and log rotation, and starts everything.
+Leave email, backups and `[[egress]]` off for now if you like; you can turn them on later.
 
-It's safe to run again: existing `.env`, `deploy/jobs.env` and keys are never overwritten.
-
-Then create your admin account and open the site:
+## 3. Deploy
 
 ```sh
-cd /opt/printerpool
+deploy/setup-server.sh                            # Windows: .\deploy\setup-server.ps1
+```
+
+The first run creates `.env` with a fresh secret key and database password, then stops if a secret your settings
+need is missing. With `mode = "token"`, that's the tunnel token: put it in `.env` as `CLOUDFLARE_TUNNEL_TOKEN=...`
+and run `setup-server` again. It then builds everything, starts it, and waits until it's healthy.
+
+If PowerShell refuses to run the script: `powershell -ExecutionPolicy Bypass -File .\deploy\setup-server.ps1`.
+
+Create your admin account, then visit `https://print.yourdomain.com`:
+
+```sh
 docker compose exec app python manage.py createsuperuser
 ```
 
-Visit `https://print.example.ac.uk`. On the very first start, the certificate can take a minute.
-
-## Alternative: Cloudflare Tunnel (no open ports)
-
-`cloudflared` runs on the server and connects *out* to Cloudflare, and visitors reach the site through that
-connection. Cloudflare handles HTTPS, so there's no Caddy, no certificate on the server, and no inbound ports
-at all. You don't need any PEM files: the `cert.pem` from `cloudflared tunnel login` is cloudflared's own
-login credential, and an Origin CA certificate isn't needed when the tunnel talks to the app on the same machine.
-
-**In Cloudflare** (Zero Trust dashboard → Networks → Tunnels):
-
-1. Create a tunnel (type *Cloudflared*) and copy its **token** (the long string in the install command).
-2. Add a **public hostname** for it, e.g. `print.example.com`, with service **`HTTP`** and URL **`localhost:8000`**.
-
-**In Hetzner**, create the server as in [step 1](#1-create-the-server-hetzner-console), with these differences:
-
-- **Firewall:** no inbound rules at all.
-- **SSH key:** optional. Without one, use the panel's **Console** button (a browser terminal, with a root
-  password you can reset from the panel) for the occasional command.
-- **Cloud config:** paste [`deploy/cloud-init.yaml`](../deploy/cloud-init.yaml) after filling in its four
-  values (domain, tunnel token, admin username, a temporary admin password).
-
-On first boot the server installs everything, connects the tunnel and creates your admin account. After a
-few minutes, `https://print.example.com` is live, and you'll be asked to change the admin password at first
-login. If it isn't, open the Console and read `/var/log/printpool-setup.log`.
-
-To do the same by hand instead (over SSH or the Console):
-
-```sh
-git clone https://github.com/lemon-gith/printerpool /opt/printerpool
-CLOUDFLARE_TUNNEL_TOKEN=... /opt/printerpool/deploy/setup-server.sh --cloudflare-tunnel print.example.com
-```
-
-**What's different behind the tunnel:**
-
-- **Uploads:** Cloudflare's free plan rejects any single request over **100 MB**, so `MAX_REQUEST_UPLOAD_MB` is
-  set to 100. The upload form shows a running total and explains the limit before anyone hits it. Files kept
-  from a recalled request don't count, since they aren't uploaded again.
-- **Visitor IPs:** login throttling reads Cloudflare's `CF-Connecting-IP` header (`DJANGO_CLIENT_IP_HEADER`).
-  To check it's working, after a failed login, Admin → *Access attempts* should show your real IP.
-- **If pages redirect endlessly,** the app isn't seeing Cloudflare's `X-Forwarded-Proto: https` header. Check
-  the tunnel's service is plain `HTTP` to `localhost:8000`, with no extra proxy in between.
-- **Switching** between Caddy and the tunnel later: re-run `setup-server.sh` with or without
-  `--cloudflare-tunnel`. It changes only the proxy, port and IP settings, and keeps your secrets and data.
-- **Updates** still need a command (`deploy/update.sh`) from the Console. To get SSH without opening a port,
-  Cloudflare can also carry SSH over the tunnel (Cloudflare Access).
+Instead, you can set `DJANGO_SUPERUSER_USERNAME` and `DJANGO_SUPERUSER_PASSWORD` when running `setup-server` the
+first time; that admin then has to change the password at first login.
 
 ## 4. Add people
 
-- **Lots of accounts:** `/admin/` → Users → **Import users (CSV)**. The page explains the format. You get a
-  one-time sheet of temporary passwords to print as slips or download as a CSV. Hand them out, then destroy
-  the sheet. Everyone picks their own password at first login.
-- **One account:** `/admin/` → Users → Add user, which shows the same kind of sheet for that one person.
+- **Lots of accounts:** `/admin/` → Users → **Import users (CSV)**. The page explains the format. You get a one-time
+  sheet of temporary passwords to print as slips or download as a CSV. Hand them out, then destroy the sheet.
+  Everyone picks their own password at first login.
+- **One account:** `/admin/` → Users → *Add user*, which shows the same kind of sheet for that one person.
 - **Lost password:** select the user → *Reset password*.
 - **Printers:** `/admin/` → Printers.
-- *(optional)* **Contact links:** set `CONTACT_STAFF_EMAILS` / `CONTACT_ADMIN_EMAILS` in `.env`.
+- **Contact links** *(optional)*: `[app] contact_staff_emails` / `contact_admin_emails` in `printpool.toml`.
 
-After changing `.env`, apply it with `docker compose up -d`.
+## 5. Email *(optional)*
 
-## 5. Email *(optional, but needed for notifications)*
+1. In [Resend](https://resend.com), add your sending domain (e.g. `send.yourdomain.com`), add the DNS records it
+   shows, and wait until it says *verified*. Create an API key.
+2. Put the key in `.env` as `EMAIL_PASSWORD=re_...`.
+3. In `printpool.toml`, set `[email] enabled = true` and `from = "PrintPool <printpool@send.yourdomain.com>"`.
+4. Run `setup-server` again, then add your own address on the **Account** page. A code should arrive within a few
+   seconds.
 
-1. Create a [Resend](https://resend.com) account and **add a domain**. A subdomain like `send.example.ac.uk`
-   keeps it tidy. Add the DNS records Resend shows you, and wait until Resend says the domain is verified.
-2. Create an **API key** with sending access.
-3. In `/opt/printerpool/.env`:
+This also allows the app to reach `smtp.resend.com:587` (and nothing else) through the gateway. If the code doesn't
+arrive, `docker compose logs gateway` shows whether the connection was made, and `docker compose logs app` shows
+any error from the mail server. If the gateway can't look up `smtp.resend.com` on your network, set
+`[gateway] dns` to your network's DNS servers.
 
-   ```
-   EMAIL_HOST=smtp.resend.com
-   EMAIL_PORT=587
-   EMAIL_HOST_USER=resend
-   EMAIL_HOST_PASSWORD=re_your_api_key
-   DEFAULT_FROM_EMAIL=PrintPool <printpool@send.example.ac.uk>
-   ```
+## 6. Backups
 
-4. `docker compose up -d`, then add your own address on the **Account** page. You should get
-   a code within a few seconds.
+Pick one or both:
 
-Keep port 587: Hetzner blocks outgoing 25 and 465 on new accounts.
+- **Automatic:** in `printpool.toml`, set `[backups] enabled = true` and choose `frequency`, `time`, `keep`,
+  `encrypt` and `include_files`. Then pick `[backups.location]`: a folder on this machine (`type = "folder"`) or a
+  named Docker volume (`type = "volume"`). With `encrypt = true`, put a password in `.env` as `BACKUP_PASSWORD`,
+  and **keep a copy of it somewhere safe**: without it, the backups can't be opened. Run `setup-server` again.
+  `docker compose logs worker` shows when the next backup is due.
+- **On demand or from your own scheduler:** `deploy/backup.sh` / `deploy\backup.ps1`, optionally with
+  `--to <folder>`. For cron or Windows Task Scheduler, see [deploy/SCHEDULING.md](../deploy/SCHEDULING.md).
 
-## 6. Off-site backups
+Encrypted backups are AES-256 zips; on Windows, open them with 7-Zip.
 
-The server keeps 14 nightly database dumps in `/var/backups/printpool`. Once a week, `deploy/offsite.sh` copies
-the newest one elsewhere, so that losing the server doesn't lose the data.
-
-**Over SSH** (simplest, to any Linux machine you control):
-
-1. On the **receiving** machine, create a user and folder for backups, and add the key the setup script
-   printed (also in `/root/.ssh/printpool_backup.pub` on the PrintPool server) to that user's
-   `~/.ssh/authorized_keys`, prefixed with `restrict ` so the key can copy files but can't open a shell:
-
-   ```
-   restrict ssh-ed25519 AAAA... printpool-backup@print.example.ac.uk
-   ```
-
-2. On the **PrintPool** server, in `/opt/printerpool/deploy/jobs.env`:
-
-   ```
-   OFFSITE_SSH_TARGET=backup@your-server.example.com:/srv/backups/printpool
-   OFFSITE_SSH_KEY=/root/.ssh/printpool_backup
-   ```
-
-**Over HTTPS** instead (or as well): set `OFFSITE_HTTP_URL` and `OFFSITE_API_KEY`. Each file is uploaded with
-`PUT <url>/<filename>` and an `Authorization: Bearer <key>` header.
-
-Test both scripts by hand, and check the file arrived:
+**Practise a restore** once, so you know it works before you need it:
 
 ```sh
-/opt/printerpool/deploy/backup.sh && /opt/printerpool/deploy/offsite.sh
+deploy/restore.sh backups/printpool-YYYYMMDD-HHMMSS.zip      # Windows: .\deploy\restore.ps1 <zip>
 ```
 
-**Practise a restore** once, so you know it works before you need it (README → Backups → Restoring).
+It asks you to type `restore`, then stops the app, replaces the database (and uploaded files, if the backup has
+them) in one go, and starts the app again.
 
-## 7. Monitoring
+## 7. After a while
 
-So you hear about problems before your users do:
-
-1. **Is the site up?** Add an HTTP monitor for `https://print.example.ac.uk/health/` in a free uptime service
-   (UptimeRobot, Better Stack, or Healthchecks.io's own). It returns `200` when the app can reach its
-   database and write uploads, and `503` otherwise.
-2. **Did the scheduled jobs run?** In [Healthchecks.io](https://healthchecks.io) (free), create three checks
-   and paste their ping URLs into `deploy/jobs.env`:
-
-   | Variable | Schedule | Grace time |
-   |---|---|---|
-   | `PURGE_PING_URL` | every hour | 30 minutes |
-   | `BACKUP_PING_URL` | every day | 2 hours |
-   | `OFFSITE_PING_URL` | every week | 1 day |
-
-   Each run reports its start, then success or failure. You get an email if a job fails **or stops running**.
-3. *(optional)* **Errors:** create a free Sentry project and put its DSN in `.env` as `SENTRY_DSN`. Crashes are
-   then reported with their stack traces. Personal data (usernames, IPs, request bodies) isn't sent.
-
-Container logs are capped at 50 MB per service; read them with `docker compose logs app`. The job logs are
-`/var/log/printpool-*.log` (rotated weekly).
-
-## 8. After a week or so
-
-Once HTTPS has been working without problems, make browsers remember to always use it. In `.env`, set
-`DJANGO_HSTS_SECONDS=31536000` (a year), then `docker compose up -d`. It starts at an hour
-because a long value is hard to undo if the site ever needs to go back to plain HTTP.
+Once everything has worked for a week or so, set `[ingress] hsts_seconds = 31536000` (a year) and run
+`setup-server` again. Browsers will then always use HTTPS for the site. It starts at an hour because a long value is
+hard to undo.
 
 ## Updating
 
 ```sh
-/opt/printerpool/deploy/update.sh
+git pull
+deploy/setup-server.sh                            # Windows: .\deploy\setup-server.ps1
 ```
 
-This pulls the latest code, rebuilds, restarts (migrations run automatically), removes old images and
-refreshes the scheduled jobs. There's a few seconds of downtime while the app container restarts.
+This rebuilds, restarts (migrations run automatically) and waits for everything to be healthy. There are a few
+seconds of downtime while the app restarts. To also get the latest cloudflared and nginx images:
+`docker compose pull cloudflared` and `docker compose build --pull gateway`, then run `setup-server` again.
+
+## Stopping and removing
+
+- Stop: `docker compose stop`. Start again: `docker compose start` (or `setup-server`).
+- Remove the containers but keep the data: `docker compose down`.
+- **Delete everything, including the database and uploads:** `docker compose down -v`. Make a backup first.
+
+## Testing locally without Cloudflare
+
+In `printpool.toml`: `[site] domain = "localhost"`, `[cloudflared] enabled = false`,
+`[ingress] publish = "127.0.0.1:8000"` and `https = false`. Run `setup-server`, then open `http://localhost:8000`.
+
+You can also keep cloudflared running *outside* Docker: disable the container, publish `127.0.0.1:8000`, and point
+that cloudflared's ingress at `http://localhost:8000`. Keep `[ingress] https = true` (the default), so the app
+trusts Cloudflare's headers.
 
 ## Launch checklist
 
-- [ ] `https://<domain>` loads with a valid certificate; `http://` redirects to it
-- [ ] *(tunnel)* Hetzner firewall has no inbound rules; a failed login shows your real IP under Access attempts
-- [ ] Admin account created; accounts imported; a test student can log in and submit a request
+- [ ] `setup-server` finishes with app, worker and gateway healthy; `docker compose ps` shows cloudflared running
+- [ ] `https://<domain>` loads; you can log in as admin
+- [ ] Accounts imported; a test student can log in and submit a request
 - [ ] Staff can approve, queue, start and finish a print
-- [ ] *(if using email)* Verification code arrives; an opted-in notification arrives
-- [ ] `backup.sh` and `offsite.sh` ran by hand; the file reached the backup server; a restore was practised
-- [ ] Uptime monitor on `/health/` is green; Healthchecks.io shows all three jobs reporting
-- [ ] Hetzner Cloud Firewall attached; SSH password login is off (`ssh -o PubkeyAuthentication=no root@<ip>` is refused)
+- [ ] After a deliberately wrong login, *Admin → Access attempts* shows your real IP (not a 172.x Docker address)
+- [ ] *(email)* A verification code arrives; an opted-in notification arrives
+- [ ] *(backups)* A backup appears in the chosen location; you've practised a restore; `BACKUP_PASSWORD` is stored
+      somewhere safe
