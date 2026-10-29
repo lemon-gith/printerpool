@@ -158,6 +158,8 @@ def notify(event, req, actor=None, print_job=None, note=""):
     """Queue `event` about print request `req` to be emailed once the current transaction commits."""
     if event not in ALL_EVENTS:
         raise ValueError(f"Unknown notification event {event!r}")
+    if not settings.EMAIL_ENABLED:
+        return
     transaction.on_commit(lambda: _deliver(event, req, actor, print_job, note), robust=True)
 
 
