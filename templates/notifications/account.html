@@ -8,6 +8,10 @@
 
 <div class="card">
   <h2>Email notifications</h2>
+  {% if not email_enabled %}
+  <p class="muted">Email isn't set up on this server, so there are no email notifications. Check the site for updates
+  (pages refresh by themselves).</p>
+  {% else %}
   <p class="notice">
     Adding an email address is <strong>optional</strong>, and email notifications are <strong>opt-in</strong>:
     a new address gets nothing until you confirm it with a one-time code <em>and</em> choose which notifications
@@ -56,5 +60,6 @@
   {% else %}
   <p class="muted">You can add up to {{ max_addresses }} addresses.</p>
   {% endif %}
+{% endif %}
 </div>
 {% endblock %}

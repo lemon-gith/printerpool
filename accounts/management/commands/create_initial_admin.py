@@ -10,7 +10,7 @@ from accounts.models import User
 class Command(BaseCommand):
     help = (
         "Create the first admin from DJANGO_SUPERUSER_USERNAME / DJANGO_SUPERUSER_PASSWORD, for unattended setup "
-        "(e.g. cloud-init). Does nothing if that account exists. The password must be changed at first login, "
+        "(deploy/setup-server). Does nothing if that account exists. The password must be changed at first login, "
         "since it passed through server metadata."
     )
 
