@@ -1,7 +1,11 @@
 .git
 .env
+printpool.toml
+.generated
+compose.override.yaml
+backups
+deploy/cloudflared
 **/__pycache__
 staticfiles
 media
 .venv
-deploy/jobs.env
