@@ -1,36 +1,34 @@
-#!/bin/sh
-# Nightly database backup: dumps Postgres to $BACKUP_DIR on this server and prunes old dumps.
+#!/usr/bin/env bash
+# Make a backup now: a zip of the database (and uploaded files, if configured), AES-256 encrypted if configured.
+# Uses [backups] in printpool.toml for everything you don't override here.
 #
-# Run from cron on the host (see deploy/crontab.example). Settings come from deploy/jobs.env.
-# Only the database is backed up: uploaded model files expire within a month anyway.
-set -eu
-
+#   deploy/backup.sh                       into the [backups.location] from printpool.toml
+#   deploy/backup.sh --to ~/printpool-bak  into another folder on this machine
+#   options: --keep N  --include-files | --no-include-files  --encrypt | --no-encrypt
+#
+# Needs PrintPool running (deploy/setup-server.sh). To run it on a schedule from cron, see deploy/SCHEDULING.md,
+# or let the worker do it ([backups] enabled = true in printpool.toml).
+set -euo pipefail
 cd "$(dirname "$0")/.."
-. deploy/monitor.sh
-monitor_job "${BACKUP_PING_URL:-}"
 
-BACKUP_DIR=${BACKUP_DIR:-/var/backups/printpool}
-BACKUP_KEEP_DAYS=${BACKUP_KEEP_DAYS:-14}
+to=
+args=()
+while [ $# -gt 0 ]; do
+    case $1 in
+        --to) to=${2:?--to needs a folder}; shift ;;
+        --to=*) to=${1#--to=} ;;
+        -h | --help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) args+=("$1") ;;
+    esac
+    shift
+done
 
-mkdir -p "$BACKUP_DIR"
-chmod 700 "$BACKUP_DIR"
-
-name="printpool-$(date -u +%Y%m%dT%H%M%SZ).dump"
-tmp="$BACKUP_DIR/.$name.partial"
-
-# Custom format (-Fc) is compressed and restores with pg_restore. Credentials come from the db container's env.
-# Check the dump is readable before keeping it, so a truncated file never replaces a good one.
-if ! docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$tmp" \
-    || ! docker compose exec -T db pg_restore --list < "$tmp" > /dev/null; then
-    rm -f "$tmp"
-    echo "$(date -u +%FT%TZ) backup FAILED" >&2
-    exit 1
+if [ -z "$to" ]; then
+    # The worker already has the configured backup location mounted at /backups.
+    docker compose exec -T worker python manage.py backup ${args[@]+"${args[@]}"}
+else
+    mkdir -p "$to"
+    to=$(cd "$to" && pwd)
+    docker compose run --rm --no-deps -T -v "$to:/backup-out" worker \
+        python manage.py backup --output /backup-out ${args[@]+"${args[@]}"}
 fi
-
-chmod 600 "$tmp"
-mv "$tmp" "$BACKUP_DIR/$name"
-(cd "$BACKUP_DIR" && sha256sum "$name" > "$name.sha256")
-
-find "$BACKUP_DIR" -name 'printpool-*.dump*' -type f -mtime +"$BACKUP_KEEP_DAYS" -delete
-
-echo "$(date -u +%FT%TZ) backup ok: $BACKUP_DIR/$name ($(du -h "$BACKUP_DIR/$name" | cut -f1))"

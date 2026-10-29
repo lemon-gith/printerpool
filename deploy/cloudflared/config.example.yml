@@ -1,0 +1,10 @@
+# Copy to deploy/cloudflared/config.yml (git-ignored). Paths are as seen inside the cloudflared container, where
+# this folder is mounted at /etc/cloudflared.
+
+tunnel: <your-tunnel-id>                                   # from `cloudflared tunnel list`
+credentials-file: /etc/cloudflared/<your-tunnel-id>.json   # copy the .json from ~/.cloudflared/ into this folder
+
+ingress:
+  - hostname: print.example.com                            # the same as [site] domain in printpool.toml
+    service: http://gateway:8080                           # PrintPool's gateway, over the Docker network
+  - service: http_status:404
