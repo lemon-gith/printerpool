@@ -1,0 +1,84 @@
+# PrintPool deployment settings.
+#
+# Copy this file to printpool.toml (git-ignored), edit it, then run deploy/setup-server.sh (or .ps1 on Windows).
+# Re-run setup-server after any change here. Secrets (passwords, tokens, API keys) don't go in this file:
+# they live in .env, which setup-server creates on first run.
+#
+# What runs (all in Docker, nothing installed on this machine):
+#   gateway  nginx: the only way in (from cloudflared and/or a local port) and the only way out (allowlisted egress)
+#   app      the website; no internet access of its own
+#   worker   hourly cleanup of expired files, and scheduled backups if enabled below
+#   db       PostgreSQL; reachable only by app and worker
+#   cloudflared  (optional, below) your Cloudflare Tunnel
+
+[site]
+# Public hostname people use. Must match the hostname your Cloudflare Tunnel routes to this site.
+domain = "print.example.com"
+# Times shown in the app and used for backup schedules.
+time_zone = "Europe/London"
+
+[cloudflared]
+# Run cloudflared as a container next to PrintPool. If it's off, cloudflared (or anything else) must reach the
+# gateway through the port in [ingress] below.
+enabled = true
+# "token":  a tunnel managed in the Cloudflare dashboard. Put its token in .env as CLOUDFLARE_TUNNEL_TOKEN, and set
+#           the tunnel's public hostname to service http://gateway:8080.
+# "config": a locally managed tunnel. Put config.yml and the tunnel's credentials .json in deploy/cloudflared/
+#           (see the README there); its ingress service must be http://gateway:8080.
+mode = "token"
+
+[ingress]
+# Also publish the gateway on this machine, e.g. "127.0.0.1:8000" for testing locally or for a cloudflared that
+# runs outside Docker. "" publishes nothing, so the site is reachable only through the cloudflared container.
+publish = ""
+# Visitors reach the site over HTTPS, i.e. through Cloudflare (the container above, or a cloudflared outside Docker
+# using the published port). Turns on secure cookies, HTTPS redirects and HSTS, and trusts Cloudflare's headers for
+# each visitor's IP and protocol. Set to false only for plain-http local testing.
+https = true
+# HSTS duration in seconds. Start at an hour; raise to 31536000 (a year) once everything works.
+hsts_seconds = 3600
+
+[email]
+# Verification codes and opt-in notifications. Off: the app hides all email features.
+# On: allows the app to reach host:port (and nothing else) through the gateway.
+# Put the SMTP password (for Resend, your API key) in .env as EMAIL_PASSWORD.
+enabled = false
+host = "smtp.resend.com"
+port = 587
+username = "resend"
+from = "PrintPool <printpool@send.example.com>"
+
+# Any other destinations the app may reach, one [[egress]] block each. Most setups need none.
+# [[egress]]
+# host = "api.example.com"
+# port = 443
+
+[gateway]
+# DNS servers the gateway uses to look up egress destinations. Empty: use the same servers as Docker on this
+# machine. Only matters when email or [[egress]] is on.
+dns = []
+
+[backups]
+# Scheduled backups, made by the worker container. deploy/backup.sh / .ps1 make one on demand either way.
+enabled = false
+frequency = "daily"      # "hourly", "daily" or "weekly"
+time = "03:30"           # for daily and weekly, in [site] time_zone
+weekday = "sunday"       # for weekly
+keep = 14                # how many backups to keep in the location; older ones are deleted. 0 keeps all.
+encrypt = true           # AES-256 zip; set BACKUP_PASSWORD in .env. (Windows needs 7-Zip to open these.)
+include_files = false    # also back up uploaded model files (they expire within a month anyway)
+
+[backups.location]
+# "folder": a folder on this machine (relative to this repo, or absolute).
+# "volume": a named Docker volume.
+type = "folder"
+path = "./backups"
+# volume = "printpool_backups"
+
+[app]
+print_cap_grams_per_month = 500
+max_upload_mb = 50            # per file
+max_request_upload_mb = 100   # all new files in one submission (Cloudflare's free plan caps requests at 100 MB)
+# mailto: links shown to users (staff contacts) and to staff (admin contacts). Empty lists hide them.
+contact_staff_emails = []
+contact_admin_emails = []

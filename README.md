@@ -2,7 +2,8 @@
 
 3D print request system: students submit STL/3MF files, staff approve and run prints, admins manage accounts.
 
-Django 5.2 LTS + PostgreSQL 16, run with Docker Compose.
+Django 5.2 LTS + PostgreSQL 16, run entirely in Docker Compose. Deployment is self-contained: it changes nothing on the
+machine outside this folder, so it plays nicely on a shared PC, and visitors reach it through a Cloudflare Tunnel.
 
 ## Roles
 
@@ -16,18 +17,53 @@ The `role` field is the single source of truth. Django's `is_staff`/`is_superuse
 
 ## Running it
 
-**Deploying to a server?** Follow [docs/DEPLOY.md](docs/DEPLOY.md). `deploy/setup-server.sh` does most of the work.
-
-Locally:
+Needs only **Docker** (Docker Desktop on Windows/macOS). [docs/DEPLOY.md](docs/DEPLOY.md) has the full walkthrough.
 
 ```sh
-cp .env.example .env
-# edit .env: set DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DJANGO_ALLOWED_HOSTS, DJANGO_CSRF_TRUSTED_ORIGINS
-docker compose up -d --build
-docker compose exec app python manage.py createsuperuser   # your first admin
+cp printpool.example.toml printpool.toml    # Windows: Copy-Item printpool.example.toml printpool.toml
+# edit printpool.toml: at least [site] domain and [cloudflared]
+deploy/setup-server.sh                       # Windows: .\deploy\setup-server.ps1
+docker compose exec app python manage.py createsuperuser
 ```
 
-The app is on `http://<host>:8000`. Migrations run automatically on every start.
+`setup-server` checks `printpool.toml`, creates `.env` with fresh secrets on the first run (and tells you if a
+secret your settings need is missing), builds and starts everything, and waits until it's healthy. Run it again after
+editing `printpool.toml` or pulling a new version. Migrations run automatically.
+
+For local testing without Cloudflare, set `[cloudflared] enabled = false`, `[ingress] publish = "127.0.0.1:8000"`,
+`https = false` and `[site] domain = "localhost"`, then open `http://localhost:8000`.
+
+### Configuration
+
+| File | What | In git? |
+|------|------|---------|
+| `printpool.toml` | All deployment settings: domain, cloudflared, which ports and destinations are open, email, backups, app limits. Annotated in `printpool.example.toml`. | no (copy the example) |
+| `.env` | Secrets only: Django secret key and database password (generated), and `CLOUDFLARE_TUNNEL_TOKEN`, `EMAIL_PASSWORD`, `BACKUP_PASSWORD` when you use those features. | no |
+| `.generated/`, `compose.override.yaml` | Rendered from the two above by `deploy/render_config.py`. Don't edit; re-run `setup-server`. | no |
+
+### What runs, and what can talk to what
+
+```
+  cloudflared ─┐  (optional container, [cloudflared])
+  host port ───┤  (optional, [ingress] publish)
+               ▼
+  gateway (nginx) ── edge network (internet): allowlisted egress only
+     │  app network (internal)
+     ▼
+  app ─── db network (internal) ─── db, worker
+```
+
+- **gateway** (nginx) is the only way in: cloudflared, or a published port if you set one, connects to it on port 8080.
+  It is also the only way out: on the app's network, each allowed destination's hostname (e.g. `smtp.resend.com`
+  when email is on) is an alias of the gateway, which passes those connections straight through. TLS stays end
+  to end, so the gateway never sees message contents. Each connection is logged (`docker compose logs gateway`).
+- **app**, **worker** and **db** are only on `internal` Docker networks: no route to the internet, and they can't
+  even look up outside hostnames. The database publishes no ports, and only the app and worker can reach it; the
+  gateway can't.
+- **worker** runs the hourly cleanup of expired files and scheduled backups.
+- Opening more egress: turn on `[email]`, or add `[[egress]]` entries with a host and port. Several hosts can
+  share port 443; they're told apart by the TLS server name. To look those hostnames up, the gateway uses this
+  machine's DNS servers, or `[gateway] dns` if set.
 
 ### Creating accounts
 
@@ -76,7 +112,7 @@ Each request has a `files_expire_at` timestamp:
 
 Approval alone doesn't change the expiry. The rules live in `prints/services.py`.
 
-Downloads are blocked as soon as the deadline passes. The files are actually deleted by `python manage.py purge_expired_files` (use `--dry-run` to preview), run hourly from cron (see [Scheduled jobs](#scheduled-jobs)). The database rows are kept for history.
+Downloads are blocked as soon as the deadline passes. The **worker** container deletes expired files every hour (`python manage.py purge_expired_files`, which also takes `--dry-run`). The database rows are kept for history.
 
 ## Email notifications
 
@@ -89,30 +125,30 @@ Users can opt in to: request approved / rejected / completed, and print started 
 
 Emails are sent after the change is saved. If the mail service is down, the workflow carries on and the failure is logged.
 
+With `[email] enabled = false` (the default), the app hides every email feature, and the Account page just says email isn't set up.
+
 ### Setting up Resend
 
-Nothing extra runs on the server. Django talks to Resend over SMTP.
+1. Create a Resend account and **add a domain** you control (a subdomain such as `send.yourdomain` is tidy). Add the DNS records Resend shows you (SPF and DKIM) and wait for Resend to show the domain as verified.
+2. Create an **API key** with sending access, and put it in `.env` as `EMAIL_PASSWORD=re_...`.
+3. In `printpool.toml`:
 
-1. Create a Resend account and **add a domain** you control (a subdomain such as `send.yourdomain` is tidy). Add the DNS records Resend shows you (SPF and DKIM) at your DNS provider and wait for Resend to show the domain as verified.
-2. Create an **API key** with sending access.
-3. In `.env`:
-
-   ```
-   DJANGO_SITE_URL=https://print.example.ac.uk
-   EMAIL_HOST=smtp.resend.com
-   EMAIL_PORT=587
-   EMAIL_HOST_USER=resend
-   EMAIL_HOST_PASSWORD=re_...your API key...
-   DEFAULT_FROM_EMAIL=PrintPool <printpool@send.yourdomain>
+   ```toml
+   [email]
+   enabled = true
+   host = "smtp.resend.com"
+   port = 587
+   username = "resend"
+   from = "PrintPool <printpool@send.yourdomain>"
    ```
 
-4. `docker compose up -d`, then add your own address on the Account page to test.
+4. Run `setup-server` again, then add your own address on the Account page to test.
 
-Use port **587** (STARTTLS): Hetzner blocks outgoing ports 25 and 465 on new accounts. With `EMAIL_HOST` left blank, emails are printed to the app log instead (`docker compose logs app`), which is handy locally. If the uni later provides an SMTP relay, just change these settings.
+Turning email on also allows the app to reach exactly `smtp.resend.com:587` (and nothing else) through the gateway. Any SMTP provider works the same way; if the uni provides a relay, change `host`, `port` and `username`.
 
 ## Contact links
 
-Set `CONTACT_STAFF_EMAILS` and/or `CONTACT_ADMIN_EMAILS` in `.env` to show plain `mailto:` links. Each takes one address or a comma-separated list (`a@uni.ac.uk,b@uni.ac.uk`), and the link then opens one email addressed to all of them. Invalid addresses stop the app at startup with a clear error. They open the person's own email app, and the server sends nothing. Everyone sees *Contact staff*; staff and admins also see *Contact an admin*. On their own request page, users get an *Email staff* link with the request's title and URL pre-filled. Leave a setting blank to hide its link.
+Set `contact_staff_emails` and/or `contact_admin_emails` under `[app]` in `printpool.toml` to show plain `mailto:` links. Each is a list of addresses (`["a@uni.ac.uk", "b@uni.ac.uk"]`), and the link opens one email addressed to all of them. They open the person's own email app, and the server sends nothing. Everyone sees *Contact staff*; staff and admins also see *Contact an admin*. On their own request page, users get an *Email staff* link with the request's title and URL pre-filled. Leave a setting blank to hide its link.
 
 ## Live updates
 
@@ -120,71 +156,68 @@ Request pages and the dashboard refresh their status, prints, files and history 
 
 ## Print cap
 
-The monthly cap is in grams of filament: `PRINT_CAP_GRAMS_PER_MONTH` in `.env`, with a per-user override in the admin. Usage is calculated live from prints that **succeeded or failed** during the current calendar month, using the grams staff enter when finishing a print (the slicer estimate if left blank). Students see their usage on their dashboard, and staff see the requester's usage on each request. Nothing is blocked by the cap yet; it's informational. See `cap_status()` / `filament_used()` in `prints/services.py`.
+The monthly cap is in grams of filament: `print_cap_grams_per_month` under `[app]` in `printpool.toml`, with a per-user override in the admin. Usage is calculated live from prints that **succeeded or failed** during the current calendar month, using the grams staff enter when finishing a print (the slicer estimate if left blank). Students see their usage on their dashboard, and staff see the requester's usage on each request. Nothing is blocked by the cap yet; it's informational. See `cap_status()` / `filament_used()` in `prints/services.py`.
 
-## HTTPS on a public VPS
+## HTTPS and visitor IPs
 
-`deploy/setup-server.sh` sets all of this up for you. To do it by hand, point a DNS name at the VPS, then in `.env`:
+Cloudflare handles HTTPS. With `[ingress] https = true` (the default), Django marks cookies secure, redirects any
+request that didn't arrive over HTTPS, and sends HSTS for `hsts_seconds` (1 hour to start; raise it to a year once
+everything works).
 
-```
-SITE_DOMAIN=print.example.ac.uk
-DJANGO_ALLOWED_HOSTS=print.example.ac.uk
-DJANGO_CSRF_TRUSTED_ORIGINS=https://print.example.ac.uk
-DJANGO_SECURE=1
-APP_PORT=127.0.0.1:8000          # only reachable through Caddy
-DJANGO_TRUSTED_PROXY_COUNT=1     # trust Caddy's X-Forwarded-For for real visitor IPs
-```
-
-Then run `docker compose --profile proxy up -d`. Caddy fetches and renews a Let's Encrypt certificate automatically. With `DJANGO_SECURE=1`, Django also redirects plain HTTP and sends HSTS for `DJANGO_HSTS_SECONDS` (1 hour by default; raise it to a year once HTTPS is proven, see [docs/DEPLOY.md](docs/DEPLOY.md#8-after-a-week-or-so)).
-
-**Keep `APP_PORT` and `DJANGO_TRUSTED_PROXY_COUNT` together.** Login throttling locks out a username + IP pair after 5 failures. Behind Caddy, the app would otherwise see every visitor as Caddy's address, so anyone could lock any user out. `DJANGO_TRUSTED_PROXY_COUNT=1` makes it use the address Caddy recorded instead. That's only safe while the app port is unreachable from outside (`127.0.0.1:`), because a client talking to the app directly could fake that header. For local testing without Caddy, leave both at their defaults.
-
-On Hetzner, also add a Cloud Firewall allowing only TCP 22, 80 and 443 (and UDP 443) inbound.
+Login throttling locks out a username + IP pair after 5 failures, so it needs each visitor's real IP. Behind the
+cloudflared container that comes from Cloudflare's `CF-Connecting-IP` header; with only a published port, from the
+gateway. Anyone with access to the machine itself could fake those headers. That's accepted here, because the
+people running it are trusted staff.
 
 ## Backups
 
-Only the database is backed up automatically. Uploaded files expire within a month and can be re-uploaded.
+A backup is a zip named `printpool-YYYYMMDD-HHMMSS.zip`, holding a `pg_dump` of the database (`database.dump`) and,
+with `include_files`, the uploaded model files (`media/`). With `encrypt = true` it's an **AES-256** zip using
+`BACKUP_PASSWORD` from `.env`. Windows' built-in zip support can't open those, but [7-Zip](https://www.7-zip.org/)
+can. Each dump is checked before it's kept, backups appear in the folder complete or not at all, and only their
+owner can read them.
 
-- **Nightly** `deploy/backup.sh` writes a compressed `pg_dump` to `BACKUP_DIR` on the server (default `/var/backups/printpool`). It checks the dump is readable before keeping it, writes a `.sha256` checksum next to it, and deletes dumps older than `BACKUP_KEEP_DAYS` (default 14).
-- **Weekly** `deploy/offsite.sh` re-verifies the newest dump's checksum and copies it (plus checksum) off the server, over **SSH** (`scp` with a dedicated key), an **HTTPS upload** (`PUT <url>/<file>` with `Authorization: Bearer <API key>`), or both.
+- **Scheduled:** set `[backups] enabled = true` with `frequency` (`hourly`, `daily`, `weekly`), `time`, `weekday`,
+  `keep` (how many to keep; 0 keeps all), `encrypt`, `include_files`, and `[backups.location]` (a folder on this
+  machine, or a named Docker volume). The worker makes them; `docker compose logs worker` shows when the next is due.
+- **On demand:** `deploy/backup.sh` / `deploy\backup.ps1` makes one now in the same location, or elsewhere with
+  `--to <folder>` (PowerShell: `-To`). Options: `--keep N`, `--include-files`/`--no-include-files`,
+  `--encrypt`/`--no-encrypt`. To schedule these from cron or Windows Task Scheduler instead of the worker, see
+  [deploy/SCHEDULING.md](deploy/SCHEDULING.md).
+- **Restore:** `deploy/restore.sh <zip>` / `deploy\restore.ps1 <zip>` (add `--no-files` for the database only). It
+  asks for confirmation, stops the app and worker, replaces the database (in one transaction, so a failure changes
+  nothing) and the uploaded files, then starts them again. For a backup made with a different password, set
+  `BACKUP_PASSWORD` in the environment for that run.
 
-Setup:
-
-`deploy/setup-server.sh` creates `deploy/jobs.env` (git-ignored) and a dedicated SSH key, `/root/.ssh/printpool_backup`. Fill in the `OFFSITE_*` settings in `deploy/jobs.env` and install the public key on the receiving server, prefixed with `restrict ` so it can copy files but can't open a shell or forward ports. [docs/DEPLOY.md](docs/DEPLOY.md#6-off-site-backups) has the steps. Run both scripts once by hand (`sudo deploy/backup.sh && sudo deploy/offsite.sh`) to check they work.
-
-**Restoring** (works for any dump, local or off-site):
-
-```sh
-docker compose stop app
-docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < printpool-YYYYMMDDTHHMMSSZ.dump
-docker compose start app
-```
-
-## Scheduled jobs
-
-`deploy/crontab.example` holds all three jobs: hourly file purge (`deploy/purge.sh`), nightly dump (`deploy/backup.sh`) and weekly off-site copy (`deploy/offsite.sh`). The setup and update scripts install it as `/etc/cron.d/printpool`, with the repo's real path. Their logs go to `/var/log/printpool-*.log`, rotated weekly.
+Copying backups to another machine (e.g. over SSH) is planned as an add-on.
 
 ## Monitoring
 
-- **`/health/`** returns `{"status": "ok", ...}` with HTTP 200 when the app can reach the database and write uploads, and 503 otherwise. Docker uses it as the app container's healthcheck (see `docker compose ps`); point an uptime monitor at `https://<domain>/health/`.
-- **Scheduled jobs** report to optional ping URLs in `deploy/jobs.env` (`PURGE_PING_URL`, `BACKUP_PING_URL`, `OFFSITE_PING_URL`), using the Healthchecks.io convention: `/start`, then success or `/fail`. The service alerts you if a job fails or doesn't run on time.
-- **Errors:** set `SENTRY_DSN` in `.env` to report unhandled exceptions to Sentry. No personal data is sent.
+- **`/health/`** returns `{"status": "ok", ...}` with HTTP 200 when the app can reach the database and write uploads,
+  and 503 otherwise. Every service has a Docker healthcheck, so `docker compose ps` shows the state at a glance.
+- **Logs:** `docker compose logs -f [gateway|app|worker|db|cloudflared]`, capped at 5 × 10 MB per service.
+- **Errors:** to report unhandled exceptions to Sentry, put `SENTRY_DSN` in `.env` and allow its host in an
+  `[[egress]]` entry. No personal data is sent.
 
 ## Continuous integration
 
-`.github/workflows/tests.yml` runs on every pull request and every push to `main`. It checks for missing migrations, runs Django's system checks and its production checklist (`check --deploy`), runs the tests against Postgres 16, and builds the production Docker image.
+`.github/workflows/tests.yml` runs on every pull request and every push to `main`. It runs the `render_config`
+tests, checks for missing migrations, runs Django's system checks and its production checklist (`check --deploy`),
+runs the tests against Postgres 16 (including real backup and restore round trips), renders the example config and
+validates the Compose files, and builds both images.
 
-## Moving to another server
+## Moving to another machine
 
-1. On the old host: `docker compose stop app`, run `deploy/backup.sh`, and copy the newest dump across. To keep files that haven't expired yet, also run: `docker run --rm -v printpool_media:/data -v "$PWD":/backup alpine tar czf /backup/media.tgz -C /data .`
-2. On the new host: clone the repo, copy `.env` and `deploy/jobs.env` (update the hostnames), then `docker compose up -d db`.
-3. Restore the database as above. Restore files (if copied): `docker compose run --rm -v "$PWD":/backup --entrypoint sh app -c "tar xzf /backup/media.tgz -C /data/media"`
-4. `docker compose up -d`, then run `deploy/setup-server.sh <domain>` (it keeps your copied settings) or install the crontab by hand.
+1. On the old machine: `deploy/backup.sh --to <folder> --include-files`.
+2. On the new one: clone the repo, copy `printpool.toml` and `.env` across (the same `BACKUP_PASSWORD` is needed to
+   open the backup), and run `deploy/setup-server.sh`.
+3. `deploy/restore.sh <the zip>`.
 
 ## Development
 
 ```sh
-docker compose run --rm app python manage.py test          # run tests (CI runs these on every PR too)
+docker compose run --rm app python manage.py test               # Django tests (after setup-server has run once)
+python3 deploy/test_render_config.py                            # deployment config tests (standard library only)
 docker compose run --rm -u root -v "$PWD:/app" app python manage.py makemigrations   # after model changes
 ```
 
@@ -196,13 +229,18 @@ notifications/  opt-in email addresses (OTP verification), per-address preferenc
 prints/     requests, files, prints, printers, audit log
   services.py   all workflow rules: transitions, permissions, expiry, purge, cap
   validators.py STL/3MF checks (extension, size, file signature)
+ops/        backups (create, restore, keep-N), backup schedule, the worker loop
 templates/  server-rendered HTML
-static/js/live.js  polling live updates
-deploy/     server setup/update scripts, Caddyfile (HTTPS proxy), job scripts (purge, backup, offsite), crontab
+static/js/  live.js (polling live updates), file-picker.js (removable file bubbles)
+printpool.example.toml   annotated deployment settings
+deploy/
+  setup-server.sh/.ps1   deploy or update
+  backup.sh/.ps1, restore.sh/.ps1, SCHEDULING.md
+  render_config.py       printpool.toml -> .generated/ + compose.override.yaml (with tests)
+  gateway/               nginx image for the gateway (and its DNS setup for egress)
+  cloudflared/           config.yml + credentials for a locally managed tunnel (git-ignored)
 docs/       DEPLOY.md: step-by-step deployment guide
 ```
-
-Container logs are capped at 5 × 10 MB per service (`x-logging` in `compose.yaml`), so they can't fill the disk.
 
 ## Next steps
 

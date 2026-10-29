@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "accounts",
     "prints",
     "notifications",
+    "ops",
 ]
 
 MIDDLEWARE = [
@@ -126,7 +127,7 @@ SESSION_COOKIE_SECURE = SECURE
 CSRF_COOKIE_SECURE = SECURE
 if SECURE:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-    # Caddy already redirects to HTTPS; this is a second line of defence. The health check is exempt
+    # Cloudflare already redirects to HTTPS; this is a second line of defence. The health check is exempt
     # because Docker calls it over plain HTTP from inside the container.
     SECURE_SSL_REDIRECT = True
     SECURE_REDIRECT_EXEMPT = [r"^health/$"]
@@ -145,12 +146,15 @@ AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
 AXES_RESET_ON_SUCCESS = True
 AXES_LOCKOUT_TEMPLATE = "registration/lockout.html"
 AXES_CLIENT_IP_CALLABLE = "accounts.ip.client_ip"
-# Number of reverse proxies we run in front of the app (1 with the bundled Caddy, 0 when exposed directly).
+# Number of reverse proxies we run in front of the app (1: the gateway, used for plain-http local testing).
 # Only set this when the app port is NOT reachable from the internet, or clients could forge their IP.
 TRUSTED_PROXY_COUNT = int(os.environ.get("DJANGO_TRUSTED_PROXY_COUNT", "0"))
+# Alternatively, a header that a trusted front end sets to the visitor's IP, e.g. CF-Connecting-IP behind a
+# Cloudflare Tunnel. Takes priority over TRUSTED_PROXY_COUNT. Same rule: only when the app port isn't public.
+CLIENT_IP_HEADER = os.environ.get("DJANGO_CLIENT_IP_HEADER", "").strip()
 
 LANGUAGE_CODE = "en-gb"
-TIME_ZONE = "Europe/London"
+TIME_ZONE = os.environ.get("TIME_ZONE", "Europe/London")
 USE_I18N = True
 USE_TZ = True
 
@@ -168,6 +172,9 @@ STORAGES = {
 
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
+# Total size of the new files in one submission. Cloudflare's free plan rejects request bodies over 100 MB
+# before they reach us, so checking it here (and in the browser) gives people a clear message instead.
+MAX_REQUEST_UPLOAD_MB = int(os.environ.get("MAX_REQUEST_UPLOAD_MB", "100"))
 ALLOWED_MODEL_EXTENSIONS = ["stl", "3mf"]
 MAX_FILES_PER_REQUEST = 10
 # Uploads above this are streamed to a temp file instead of held in memory.
@@ -178,15 +185,17 @@ PRINT_CAP_GRAMS_PER_MONTH = int(os.environ.get("PRINT_CAP_GRAMS_PER_MONTH", "500
 # Public address of the site, used for links in emails, e.g. https://print.example.ac.uk
 SITE_URL = os.environ.get("DJANGO_SITE_URL", "http://localhost:8000")
 
-# Outgoing email (verification codes and opt-in notifications). Without EMAIL_HOST, emails are printed to the
+# Outgoing email (verification codes and opt-in notifications). EMAIL_ENABLED=0 hides every email feature (the
+# deployment default unless [email] is enabled in printpool.toml). Enabled without EMAIL_HOST, emails are printed to the
 # app's log instead (`docker compose logs app`), which is handy for local testing.
+EMAIL_ENABLED = env_bool("EMAIL_ENABLED", True)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
-if EMAIL_HOST:
+if EMAIL_ENABLED and EMAIL_HOST:
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
     EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
     EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)  # STARTTLS on 587
     EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
-    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_PASSWORD") or os.environ.get("EMAIL_HOST_PASSWORD", "")
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 EMAIL_TIMEOUT = 10
@@ -196,6 +205,17 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "PrintPool <printpool@
 # Everyone sees the staff link; staff and admins also see the admin link.
 CONTACT_STAFF_EMAILS = env_emails("CONTACT_STAFF_EMAILS")
 CONTACT_ADMIN_EMAILS = env_emails("CONTACT_ADMIN_EMAILS")
+
+# Backups (python manage.py backup; scheduled by the worker when BACKUP_ENABLED). Set from [backups] in printpool.toml.
+BACKUP_ENABLED = env_bool("BACKUP_ENABLED", False)
+BACKUP_FREQUENCY = os.environ.get("BACKUP_FREQUENCY", "daily")  # hourly | daily | weekly
+BACKUP_TIME = os.environ.get("BACKUP_TIME", "03:30")
+BACKUP_WEEKDAY = os.environ.get("BACKUP_WEEKDAY", "sunday")
+BACKUP_KEEP = int(os.environ.get("BACKUP_KEEP", "14"))  # 0 keeps all
+BACKUP_ENCRYPT = env_bool("BACKUP_ENCRYPT", True)
+BACKUP_INCLUDE_FILES = env_bool("BACKUP_INCLUDE_FILES", False)
+BACKUP_DIR = os.environ.get("BACKUP_DIR", "/backups")
+BACKUP_PASSWORD = os.environ.get("BACKUP_PASSWORD", "")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

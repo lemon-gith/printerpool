@@ -1,12 +1,28 @@
+from functools import wraps
+
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from . import services
 from .forms import AddEmailForm, PreferencesForm, VerifyCodeForm
 from .models import EmailAddress
+
+
+def email_feature(view):
+    """The email pages exist only when email is enabled on this server ([email] in printpool.toml)."""
+
+    @wraps(view)
+    def wrapper(request, *args, **kwargs):
+        if not settings.EMAIL_ENABLED:
+            raise Http404
+        return view(request, *args, **kwargs)
+
+    return wrapper
 
 
 def _own_address(request, pk):
@@ -20,6 +36,8 @@ def _report(request, error):
 
 @login_required
 def account(request, add_form=None):
+    if not settings.EMAIL_ENABLED:
+        return render(request, "notifications/account.html", {"email_enabled": False})
     addresses = list(request.user.email_addresses.all())
     for address in addresses:
         if address.is_verified:
@@ -32,11 +50,13 @@ def account(request, add_form=None):
             "add_form": add_form or AddEmailForm(),
             "can_add": len(addresses) < services.MAX_ADDRESSES_PER_USER,
             "max_addresses": services.MAX_ADDRESSES_PER_USER,
+            "email_enabled": True,
         },
     )
 
 
 @login_required
+@email_feature
 @require_POST
 def email_add(request):
     form = AddEmailForm(request.POST)
@@ -55,6 +75,7 @@ def email_add(request):
 
 
 @login_required
+@email_feature
 @require_POST
 def email_verify(request, pk):
     address = _own_address(request, pk)
@@ -72,6 +93,7 @@ def email_verify(request, pk):
 
 
 @login_required
+@email_feature
 @require_POST
 def email_resend(request, pk):
     address = _own_address(request, pk)
@@ -85,6 +107,7 @@ def email_resend(request, pk):
 
 
 @login_required
+@email_feature
 @require_POST
 def email_preferences(request, pk):
     address = _own_address(request, pk)
@@ -105,6 +128,7 @@ def email_preferences(request, pk):
 
 
 @login_required
+@email_feature
 @require_POST
 def email_remove(request, pk):
     address = _own_address(request, pk)
