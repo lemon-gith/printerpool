@@ -1,4 +1,18 @@
-# Fixed project name so container/volume names are the same on every host, whatever the folder is called.
+# PrintPool. Don't start this directly the first time: run deploy/setup-server.sh (or .ps1), which renders
+# printpool.toml into .generated/ and compose.override.yaml (merged into this file automatically), then starts it.
+#
+#   cloudflared ─┐  (optional, added by compose.override.yaml)
+#   host port ───┤  (optional, [ingress] publish)
+#                ▼
+#   gateway  nginx ── edge network (internet) ── allowlisted egress only
+#      │  app network (internal: no internet)
+#      ▼
+#   app, worker ── db network (internal) ── db
+#
+# "internal" networks have no route outside Docker, so the app, worker and database can't reach the internet
+# (or even look up outside hostnames) except through the gateway's allowlist.
+
+# Fixed project name so container/volume names are the same on every machine, whatever the folder is called.
 name: printpool
 
 # Docker keeps container logs forever by default; cap each service at 5 x 10 MB so logs can't fill the disk.
@@ -8,22 +22,27 @@ x-logging: &logging
     max-size: "10m"
     max-file: "5"
 
+x-app: &app-base
+  build: .
+  image: printpool-app
+  restart: unless-stopped
+  logging: *logging
+  env_file:
+    - .env                    # secrets
+    - .generated/app.env      # settings rendered from printpool.toml
+  volumes:
+    - media:/data/media
+
 services:
   app:
-    build: .
-    restart: unless-stopped
-    logging: *logging
-    env_file: .env
+    <<: *app-base
     environment:
       POSTGRES_HOST: db
-    ports:
-      - "${APP_PORT:-8000}:8000"
-    volumes:
-      - media:/data/media
+    networks: [app, db]
     depends_on:
       db:
         condition: service_healthy
-    # Same check an uptime monitor uses. Sent with the site's own hostname so ALLOWED_HOSTS accepts it.
+    # Sent with the site's own hostname so ALLOWED_HOSTS accepts it.
     healthcheck:
       test:
         - CMD
@@ -39,6 +58,27 @@ services:
       start_period: 30s
       retries: 3
 
+  # Background jobs: hourly cleanup of expired files, and scheduled backups ([backups] in printpool.toml).
+  # Runs as root so it can write backups into a folder owned by any user on this machine; the files it
+  # creates are handed to that folder's owner.
+  worker:
+    <<: *app-base
+    command: ["python", "manage.py", "run_worker"]
+    user: "0:0"
+    environment:
+      POSTGRES_HOST: db
+      RUN_MIGRATIONS: "0"     # the app container does this
+    networks: [db]
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "run_worker", "--check"]
+      interval: 60s
+      timeout: 20s
+      start_period: 30s
+      retries: 3
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -49,32 +89,39 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks: [db]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # Optional HTTPS reverse proxy for a public server. Turned on by COMPOSE_PROFILES=proxy in .env (which
-  # setup-server.sh sets in Caddy mode), so a plain `docker compose up -d` does the right thing.
-  # Leave it off for local testing and behind a Cloudflare Tunnel.
-  caddy:
-    image: caddy:2-alpine
-    profiles: ["proxy"]
+  # The only way in (port 8080, from cloudflared or a published host port) and the only way out (egress
+  # allowlist). Configured by .generated/gateway.conf.
+  gateway:
+    build: deploy/gateway
+    image: printpool-gateway
     restart: unless-stopped
     logging: *logging
-    environment:
-      SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
-    ports:
-      - "80:80"
-      - "443:443"
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
+      - ./.generated/gateway.conf:/etc/nginx/nginx.conf:ro
+    networks: [edge, app]
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  edge: {}                  # normal network with internet access: gateway (and cloudflared) only
+  app:
+    internal: true          # gateway <-> app
+  db:
+    internal: true          # app/worker <-> database
 
 volumes:
   pgdata:
   media:
-  caddy_data:

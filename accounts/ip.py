@@ -7,7 +7,7 @@ def client_ip(request):
     Behind a proxy, REMOTE_ADDR is the proxy's address, so every visitor would look identical:
     - With CLIENT_IP_HEADER set (e.g. Cloudflare's CF-Connecting-IP), that header holds the address. If it's
       missing we fall back to REMOTE_ADDR, never to X-Forwarded-For, so a client can't supply its own.
-    - Otherwise, behind our own proxy (Caddy), the proxy records the real address as the right-most
+    - Otherwise, behind our own proxy (the gateway), it records the real address as the right-most
       X-Forwarded-For entry; anything to the left of that came from the client and can be forged, so we count
       in from the right by the number of proxies we actually run.
     With neither configured, headers are ignored entirely.
