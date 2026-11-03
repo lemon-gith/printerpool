@@ -1,4 +1,9 @@
+import io
+from unittest import mock
+
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
@@ -29,6 +34,45 @@ class ClientIpTests(SimpleTestCase):
     @override_settings(TRUSTED_PROXY_COUNT=1)
     def test_falls_back_without_header(self):
         self.assertEqual(client_ip(self.req()), "172.18.0.5")
+
+    @override_settings(CLIENT_IP_HEADER="CF-Connecting-IP", TRUSTED_PROXY_COUNT=0)
+    def test_cloudflare_header(self):
+        request = RequestFactory().get(
+            "/", REMOTE_ADDR="127.0.0.1", HTTP_CF_CONNECTING_IP="81.2.69.160", HTTP_X_FORWARDED_FOR="6.6.6.6"
+        )
+        self.assertEqual(client_ip(request), "81.2.69.160")
+
+    @override_settings(CLIENT_IP_HEADER="CF-Connecting-IP", TRUSTED_PROXY_COUNT=1)
+    def test_missing_cloudflare_header_never_falls_back_to_forwarded_for(self):
+        request = RequestFactory().get("/", REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="6.6.6.6")
+        self.assertEqual(client_ip(request), "127.0.0.1")
+
+
+class CreateInitialAdminTests(TestCase):
+    def run_command(self, username="boss", password="A-decent-temporary-pw-42"):
+        out = io.StringIO()
+        with mock.patch.dict("os.environ", {"DJANGO_SUPERUSER_USERNAME": username, "DJANGO_SUPERUSER_PASSWORD": password}):
+            call_command("create_initial_admin", stdout=out)
+        return out.getvalue()
+
+    def test_creates_admin_that_must_change_password(self):
+        self.run_command()
+        boss = User.objects.get(username="boss")
+        self.assertEqual(boss.role, User.Role.ADMIN)
+        self.assertTrue(boss.is_superuser and boss.must_change_password)
+        self.assertTrue(boss.check_password("A-decent-temporary-pw-42"))
+
+    def test_existing_account_is_left_alone(self):
+        User.objects.create_user("boss", password="original-password-1")
+        self.assertIn("already exists", self.run_command())
+        boss = User.objects.get(username="boss")
+        self.assertTrue(boss.check_password("original-password-1"))
+        self.assertEqual(boss.role, User.Role.USER)
+
+    def test_weak_password_refused(self):
+        with self.assertRaisesMessage(CommandError, "too weak"):
+            self.run_command(password="password")
+        self.assertFalse(User.objects.filter(username="boss").exists())
 
 
 

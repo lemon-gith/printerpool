@@ -55,8 +55,9 @@ services:
       timeout: 5s
       retries: 10
 
-  # Optional HTTPS reverse proxy for the public VPS: `docker compose --profile proxy up -d`.
-  # Leave it off for local testing. When using it, set APP_PORT=127.0.0.1:8000 and DJANGO_TRUSTED_PROXY_COUNT=1.
+  # Optional HTTPS reverse proxy for a public server. Turned on by COMPOSE_PROFILES=proxy in .env (which
+  # setup-server.sh sets in Caddy mode), so a plain `docker compose up -d` does the right thing.
+  # Leave it off for local testing and behind a Cloudflare Tunnel.
   caddy:
     image: caddy:2-alpine
     profiles: ["proxy"]

@@ -148,6 +148,9 @@ AXES_CLIENT_IP_CALLABLE = "accounts.ip.client_ip"
 # Number of reverse proxies we run in front of the app (1 with the bundled Caddy, 0 when exposed directly).
 # Only set this when the app port is NOT reachable from the internet, or clients could forge their IP.
 TRUSTED_PROXY_COUNT = int(os.environ.get("DJANGO_TRUSTED_PROXY_COUNT", "0"))
+# Alternatively, a header that a trusted front end sets to the visitor's IP, e.g. CF-Connecting-IP behind a
+# Cloudflare Tunnel. Takes priority over TRUSTED_PROXY_COUNT. Same rule: only when the app port isn't public.
+CLIENT_IP_HEADER = os.environ.get("DJANGO_CLIENT_IP_HEADER", "").strip()
 
 LANGUAGE_CODE = "en-gb"
 TIME_ZONE = "Europe/London"
@@ -168,6 +171,9 @@ STORAGES = {
 
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50"))
+# Total size of the new files in one submission. Cloudflare's free plan rejects request bodies over 100 MB
+# before they reach us, so checking it here (and in the browser) gives people a clear message instead.
+MAX_REQUEST_UPLOAD_MB = int(os.environ.get("MAX_REQUEST_UPLOAD_MB", "100"))
 ALLOWED_MODEL_EXTENSIONS = ["stl", "3mf"]
 MAX_FILES_PER_REQUEST = 10
 # Uploads above this are streamed to a temp file instead of held in memory.

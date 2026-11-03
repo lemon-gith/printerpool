@@ -17,7 +17,7 @@
     <p>{{ field.label_tag }} {{ field }} {{ field.errors }}</p>
     {% endif %}{% endfor %}
 
-    <fieldset class="file-picker" data-file-picker data-max-files="{{ max_files }}" data-max-mb="{{ max_upload_mb }}" data-extensions="{{ extensions }}">
+    <fieldset class="file-picker" data-file-picker data-max-files="{{ max_files }}" data-max-mb="{{ max_upload_mb }}" data-max-total-mb="{{ max_request_upload_mb }}" data-extensions="{{ extensions }}">
       <legend>Files</legend>
       {{ form.files.errors }}{{ form.keep_files.errors }}
       <ul class="chips" data-chips>

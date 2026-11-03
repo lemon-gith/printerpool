@@ -124,6 +124,7 @@ def request_create(request):
             "cap": services.cap_status(request.user),
             "max_files": settings.MAX_FILES_PER_REQUEST,
             "max_upload_mb": settings.MAX_UPLOAD_MB,
+            "max_request_upload_mb": settings.MAX_REQUEST_UPLOAD_MB,
             "extensions": ",".join(f".{e}" for e in settings.ALLOWED_MODEL_EXTENSIONS),
         },
     )

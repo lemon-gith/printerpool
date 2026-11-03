@@ -15,6 +15,7 @@
   var chips = picker.querySelector("[data-chips]");
   var maxFiles = parseInt(picker.dataset.maxFiles, 10);
   var maxBytes = parseInt(picker.dataset.maxMb, 10) * 1024 * 1024;
+  var maxTotalBytes = parseInt(picker.dataset.maxTotalMb, 10) * 1024 * 1024;
   var extensions = picker.dataset.extensions.toLowerCase().split(",");
   var selected = []; // File objects the user has added and not removed
   var errors = [];   // rejected picks, shown until dismissed
@@ -82,6 +83,22 @@
     return chips.querySelectorAll("[data-original] input:checked").length;
   }
 
+  function uploadBytes() {
+    return selected.reduce(function (sum, f) { return sum + f.size; }, 0);
+  }
+
+  // Why the current selection can't be submitted, or null. Kept originals aren't re-uploaded, so only new
+  // files count towards the size limit (which a proxy like Cloudflare may enforce before we ever see it).
+  function problem() {
+    var total = keptCount() + selected.length;
+    if (total > maxFiles) return "Too many files: the limit is " + maxFiles + ".";
+    if (uploadBytes() > maxTotalBytes) {
+      return "New files add up to " + formatSize(uploadBytes()) + "; the limit is " + picker.dataset.maxTotalMb +
+        " MB per submission. Remove some, and submit them as a separate request.";
+    }
+    return null;
+  }
+
   function updateCount() {
     var total = keptCount() + selected.length;
     var note = picker.querySelector("[data-count]");
@@ -91,10 +108,19 @@
       note.setAttribute("aria-live", "polite");
       chips.after(note);
     }
-    note.className = total > maxFiles ? "errorlist" : "muted";
-    note.textContent = total === 0 ? "No files selected yet."
-      : total + (total === 1 ? " file" : " files") + (total > maxFiles ? ": too many, the limit is " + maxFiles + "." : "");
+    var issue = problem();
+    note.className = issue ? "errorlist" : "muted";
+    note.textContent = issue || (total === 0 ? "No files selected yet."
+      : total + (total === 1 ? " file" : " files") + (selected.length ? " (" + formatSize(uploadBytes()) + " to upload)" : ""));
   }
+
+  picker.closest("form").addEventListener("submit", function (event) {
+    if (problem()) {
+      event.preventDefault();
+      updateCount();
+      picker.scrollIntoView({ block: "center" });
+    }
+  });
 
   function render() {
     // Write the list back into the real input so it's what gets submitted.

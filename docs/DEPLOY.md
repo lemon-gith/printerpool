@@ -6,6 +6,15 @@ console, DNS, Resend, your backup server, monitoring).
 
 Budget about an hour the first time. Steps marked *(optional)* can be done later.
 
+There are two ways to put the site on the internet:
+
+- **Caddy (default):** the server is public, and Caddy gets a free Let's Encrypt certificate. Follow steps 1–3.
+- **Cloudflare Tunnel:** the server has **no open inbound ports**, and Cloudflare handles HTTPS. It can be set up
+  entirely from Hetzner's console with no SSH. Follow [Alternative: Cloudflare Tunnel](#alternative-cloudflare-tunnel-no-open-ports)
+  instead of steps 1–3.
+
+Steps 4 onwards are the same for both.
+
 ## 0. What you need
 
 - A **domain or subdomain** for the site, e.g. `print.example.ac.uk`. A uni subdomain usually needs a request
@@ -63,6 +72,51 @@ docker compose exec app python manage.py createsuperuser
 
 Visit `https://print.example.ac.uk`. On the very first start, the certificate can take a minute.
 
+## Alternative: Cloudflare Tunnel (no open ports)
+
+`cloudflared` runs on the server and connects *out* to Cloudflare, and visitors reach the site through that
+connection. Cloudflare handles HTTPS, so there's no Caddy, no certificate on the server, and no inbound ports
+at all. You don't need any PEM files: the `cert.pem` from `cloudflared tunnel login` is cloudflared's own
+login credential, and an Origin CA certificate isn't needed when the tunnel talks to the app on the same machine.
+
+**In Cloudflare** (Zero Trust dashboard → Networks → Tunnels):
+
+1. Create a tunnel (type *Cloudflared*) and copy its **token** (the long string in the install command).
+2. Add a **public hostname** for it, e.g. `print.example.com`, with service **`HTTP`** and URL **`localhost:8000`**.
+
+**In Hetzner**, create the server as in [step 1](#1-create-the-server-hetzner-console), with these differences:
+
+- **Firewall:** no inbound rules at all.
+- **SSH key:** optional. Without one, use the panel's **Console** button (a browser terminal, with a root
+  password you can reset from the panel) for the occasional command.
+- **Cloud config:** paste [`deploy/cloud-init.yaml`](../deploy/cloud-init.yaml) after filling in its four
+  values (domain, tunnel token, admin username, a temporary admin password).
+
+On first boot the server installs everything, connects the tunnel and creates your admin account. After a
+few minutes, `https://print.example.com` is live, and you'll be asked to change the admin password at first
+login. If it isn't, open the Console and read `/var/log/printpool-setup.log`.
+
+To do the same by hand instead (over SSH or the Console):
+
+```sh
+git clone https://github.com/lemon-gith/printerpool /opt/printerpool
+CLOUDFLARE_TUNNEL_TOKEN=... /opt/printerpool/deploy/setup-server.sh --cloudflare-tunnel print.example.com
+```
+
+**What's different behind the tunnel:**
+
+- **Uploads:** Cloudflare's free plan rejects any single request over **100 MB**, so `MAX_REQUEST_UPLOAD_MB` is
+  set to 100. The upload form shows a running total and explains the limit before anyone hits it. Files kept
+  from a recalled request don't count, since they aren't uploaded again.
+- **Visitor IPs:** login throttling reads Cloudflare's `CF-Connecting-IP` header (`DJANGO_CLIENT_IP_HEADER`).
+  To check it's working, after a failed login, Admin → *Access attempts* should show your real IP.
+- **If pages redirect endlessly,** the app isn't seeing Cloudflare's `X-Forwarded-Proto: https` header. Check
+  the tunnel's service is plain `HTTP` to `localhost:8000`, with no extra proxy in between.
+- **Switching** between Caddy and the tunnel later: re-run `setup-server.sh` with or without
+  `--cloudflare-tunnel`. It changes only the proxy, port and IP settings, and keeps your secrets and data.
+- **Updates** still need a command (`deploy/update.sh`) from the Console. To get SSH without opening a port,
+  Cloudflare can also carry SSH over the tunnel (Cloudflare Access).
+
 ## 4. Add people
 
 - **Lots of accounts:** `/admin/` → Users → **Import users (CSV)**. The page explains the format. You get a
@@ -73,7 +127,7 @@ Visit `https://print.example.ac.uk`. On the very first start, the certificate ca
 - **Printers:** `/admin/` → Printers.
 - *(optional)* **Contact links:** set `CONTACT_STAFF_EMAILS` / `CONTACT_ADMIN_EMAILS` in `.env`.
 
-After changing `.env`, apply it with `docker compose --profile proxy up -d`.
+After changing `.env`, apply it with `docker compose up -d`.
 
 ## 5. Email *(optional, but needed for notifications)*
 
@@ -90,7 +144,7 @@ After changing `.env`, apply it with `docker compose --profile proxy up -d`.
    DEFAULT_FROM_EMAIL=PrintPool <printpool@send.example.ac.uk>
    ```
 
-4. `docker compose --profile proxy up -d`, then add your own address on the **Account** page. You should get
+4. `docker compose up -d`, then add your own address on the **Account** page. You should get
    a code within a few seconds.
 
 Keep port 587: Hetzner blocks outgoing 25 and 465 on new accounts.
@@ -154,7 +208,7 @@ Container logs are capped at 50 MB per service; read them with `docker compose l
 ## 8. After a week or so
 
 Once HTTPS has been working without problems, make browsers remember to always use it. In `.env`, set
-`DJANGO_HSTS_SECONDS=31536000` (a year), then `docker compose --profile proxy up -d`. It starts at an hour
+`DJANGO_HSTS_SECONDS=31536000` (a year), then `docker compose up -d`. It starts at an hour
 because a long value is hard to undo if the site ever needs to go back to plain HTTP.
 
 ## Updating
@@ -169,6 +223,7 @@ refreshes the scheduled jobs. There's a few seconds of downtime while the app co
 ## Launch checklist
 
 - [ ] `https://<domain>` loads with a valid certificate; `http://` redirects to it
+- [ ] *(tunnel)* Hetzner firewall has no inbound rules; a failed login shows your real IP under Access attempts
 - [ ] Admin account created; accounts imported; a test student can log in and submit a request
 - [ ] Staff can approve, queue, start and finish a print
 - [ ] *(if using email)* Verification code arrives; an opted-in notification arrives

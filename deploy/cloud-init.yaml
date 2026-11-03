@@ -1,0 +1,34 @@
+#cloud-config
+# PrintPool on Hetzner behind a Cloudflare Tunnel, with no SSH needed.
+#
+# Paste this whole file into the "Cloud config" box when creating the server, after filling in the four
+# values below. On first boot the server installs everything, connects the tunnel and creates your admin
+# account; when it's done (a few minutes), the site is live at https://<DOMAIN>.
+#
+# Before creating the server: in Cloudflare Zero Trust, create a tunnel and copy its token, and give it a
+# public hostname <DOMAIN> whose service is http://localhost:8000 (see docs/DEPLOY.md).
+#
+# Hetzner keeps this text as server metadata, readable from inside the server, so treat the token as a
+# secret and choose the admin password knowing you'll be made to change it at first login.
+# Progress and errors are logged on the server in /var/log/printpool-setup.log (Hetzner console: Console).
+
+write_files:
+  - path: /root/printpool-install.env
+    permissions: "0600"
+    content: |
+      DOMAIN=print.example.com
+      CLOUDFLARE_TUNNEL_TOKEN=paste-your-tunnel-token-here
+      DJANGO_SUPERUSER_USERNAME=admin
+      DJANGO_SUPERUSER_PASSWORD=choose-a-temporary-password
+
+runcmd:
+  - - bash
+    - -c
+    - |
+      set -a; . /root/printpool-install.env; set +a
+      {
+        git clone https://github.com/lemon-gith/printerpool /opt/printerpool &&
+        /opt/printerpool/deploy/setup-server.sh --cloudflare-tunnel "$DOMAIN"
+      } > /var/log/printpool-setup.log 2>&1
+      echo "PrintPool setup finished with exit code $?" >> /var/log/printpool-setup.log
+      shred -u /root/printpool-install.env

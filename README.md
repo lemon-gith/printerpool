@@ -16,7 +16,7 @@ The `role` field is the single source of truth. Django's `is_staff`/`is_superuse
 
 ## Running it
 
-**Deploying to a server?** Follow [docs/DEPLOY.md](docs/DEPLOY.md). `deploy/setup-server.sh` does most of the work.
+**Deploying to a server?** Follow [docs/DEPLOY.md](docs/DEPLOY.md). `deploy/setup-server.sh` does most of the work, either with Caddy and Let's Encrypt on a public server, or behind a **Cloudflare Tunnel** with no open ports (`--cloudflare-tunnel`, or paste `deploy/cloud-init.yaml` into Hetzner's Cloud config box so you never need SSH).
 
 Locally:
 
@@ -124,7 +124,7 @@ The monthly cap is in grams of filament: `PRINT_CAP_GRAMS_PER_MONTH` in `.env`, 
 
 ## HTTPS on a public VPS
 
-`deploy/setup-server.sh` sets all of this up for you. To do it by hand, point a DNS name at the VPS, then in `.env`:
+`deploy/setup-server.sh` sets all of this up for you (for the Cloudflare Tunnel alternative, see [docs/DEPLOY.md](docs/DEPLOY.md#alternative-cloudflare-tunnel-no-open-ports)). To do it by hand, point a DNS name at the VPS, then in `.env`:
 
 ```
 SITE_DOMAIN=print.example.ac.uk
@@ -133,9 +133,10 @@ DJANGO_CSRF_TRUSTED_ORIGINS=https://print.example.ac.uk
 DJANGO_SECURE=1
 APP_PORT=127.0.0.1:8000          # only reachable through Caddy
 DJANGO_TRUSTED_PROXY_COUNT=1     # trust Caddy's X-Forwarded-For for real visitor IPs
+COMPOSE_PROFILES=proxy           # run Caddy
 ```
 
-Then run `docker compose --profile proxy up -d`. Caddy fetches and renews a Let's Encrypt certificate automatically. With `DJANGO_SECURE=1`, Django also redirects plain HTTP and sends HSTS for `DJANGO_HSTS_SECONDS` (1 hour by default; raise it to a year once HTTPS is proven, see [docs/DEPLOY.md](docs/DEPLOY.md#8-after-a-week-or-so)).
+Then run `docker compose up -d`. Caddy fetches and renews a Let's Encrypt certificate automatically. With `DJANGO_SECURE=1`, Django also redirects plain HTTP and sends HSTS for `DJANGO_HSTS_SECONDS` (1 hour by default; raise it to a year once HTTPS is proven, see [docs/DEPLOY.md](docs/DEPLOY.md#8-after-a-week-or-so)).
 
 **Keep `APP_PORT` and `DJANGO_TRUSTED_PROXY_COUNT` together.** Login throttling locks out a username + IP pair after 5 failures. Behind Caddy, the app would otherwise see every visitor as Caddy's address, so anyone could lock any user out. `DJANGO_TRUSTED_PROXY_COUNT=1` makes it use the address Caddy recorded instead. That's only safe while the app port is unreachable from outside (`127.0.0.1:`), because a client talking to the app directly could fake that header. For local testing without Caddy, leave both at their defaults.
 
